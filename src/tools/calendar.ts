@@ -1,30 +1,31 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CalendarService } from "../services/calendar.js";
+import { safeHandler, textResult, jsonResult } from "../tool-handler.js";
 
 export function registerCalendarTools(server: McpServer, calendar: CalendarService) {
   server.tool(
     "calendar_list_calendars",
     "List all available calendars",
     {},
-    async () => {
+    safeHandler(async () => {
       const calendars = await calendar.listCalendars();
-      return { content: [{ type: "text", text: JSON.stringify(calendars, null, 2) }] };
-    }
+      return jsonResult(calendars);
+    })
   );
 
   server.tool(
     "calendar_list_events",
-    "List calendar events in a date range",
+    "List calendar events in a date range. Dates should be ISO 8601 format.",
     {
       from: z.string().describe("Start date/time (ISO 8601, e.g. 2025-01-15T09:00:00)"),
       to: z.string().describe("End date/time (ISO 8601, e.g. 2025-01-15T18:00:00)"),
       calendar_id: z.string().optional().describe("Calendar ID (omit for all calendars)"),
     },
-    async ({ from, to, calendar_id }) => {
+    safeHandler(async ({ from, to, calendar_id }) => {
       const events = await calendar.listEvents(from, to, calendar_id);
-      return { content: [{ type: "text", text: JSON.stringify(events, null, 2) }] };
-    }
+      return jsonResult(events);
+    })
   );
 
   server.tool(
@@ -39,20 +40,20 @@ export function registerCalendarTools(server: McpServer, calendar: CalendarServi
       attendees: z.array(z.string()).optional().describe("List of attendee email addresses"),
       full_day: z.boolean().optional().describe("Is this a full-day event?"),
     },
-    async ({ title, start, end, description, calendar_id, attendees, full_day }) => {
+    safeHandler(async ({ title, start, end, description, calendar_id, attendees, full_day }) => {
       const event = await calendar.createEvent({
         title, start, end, description,
         calendarId: calendar_id,
         attendees,
         fullDay: full_day,
       });
-      return { content: [{ type: "text", text: JSON.stringify(event, null, 2) }] };
-    }
+      return jsonResult(event);
+    })
   );
 
   server.tool(
     "calendar_update_event",
-    "Update an existing calendar event",
+    "Update an existing calendar event. Only provided fields will be changed.",
     {
       event_id: z.string().describe("Event ID to update"),
       title: z.string().optional().describe("New title"),
@@ -60,19 +61,19 @@ export function registerCalendarTools(server: McpServer, calendar: CalendarServi
       end: z.string().optional().describe("New end date/time (ISO 8601)"),
       description: z.string().optional().describe("New description"),
     },
-    async ({ event_id, title, start, end, description }) => {
+    safeHandler(async ({ event_id, title, start, end, description }) => {
       const event = await calendar.updateEvent(event_id, { title, start, end, description });
-      return { content: [{ type: "text", text: JSON.stringify(event, null, 2) }] };
-    }
+      return jsonResult(event);
+    })
   );
 
   server.tool(
     "calendar_delete_event",
     "Delete a calendar event",
     { event_id: z.string().describe("Event ID to delete") },
-    async ({ event_id }) => {
+    safeHandler(async ({ event_id }) => {
       await calendar.deleteEvent(event_id);
-      return { content: [{ type: "text", text: `Deleted event ${event_id}` }] };
-    }
+      return textResult(`Deleted event ${event_id}`);
+    })
   );
 }

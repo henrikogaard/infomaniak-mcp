@@ -135,7 +135,7 @@ export class CalendarService {
   }): Promise<CalendarEvent> {
     const { timezone } = await this.getUserProfile();
     const body: Record<string, unknown> = {};
-    if (params.title) body.title = params.title;
+    if (params.title !== undefined) body.title = params.title;
     if (params.start) {
       body.start = formatDateForApi(params.start);
       body.timezone_start = timezone;
@@ -151,14 +151,32 @@ export class CalendarService {
   }
 }
 
+/**
+ * Format a date string for the Infomaniak Calendar API.
+ * Accepts ISO 8601 or "YYYY-MM-DD HH:mm" format.
+ * Returns "YYYY-MM-DD HH:mm" format.
+ *
+ * Uses regex parsing to avoid timezone conversion issues
+ * (Date constructor would convert to local timezone).
+ */
 function formatDateForApi(dateStr: string): string {
-  // Accept ISO 8601 and convert to "YYYY-MM-DD HH:mm" format
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return dateStr;
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  const hours = String(d.getHours()).padStart(2, "0");
-  const mins = String(d.getMinutes()).padStart(2, "0");
-  return `${year}-${month}-${day} ${hours}:${mins}`;
+  // If already in "YYYY-MM-DD HH:mm" format, pass through
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(dateStr)) {
+    return dateStr;
+  }
+
+  // Try ISO 8601 regex: "2025-01-15T09:00:00", "2025-01-15T09:00:00Z", "2025-01-15T09:00:00+02:00"
+  const isoMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]} ${isoMatch[4]}:${isoMatch[5]}`;
+  }
+
+  // Date-only: "2025-01-15" → midnight
+  const dateOnlyMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnlyMatch) {
+    return `${dateOnlyMatch[1]}-${dateOnlyMatch[2]}-${dateOnlyMatch[3]} 00:00`;
+  }
+
+  // Last resort: pass through and let the API handle it
+  return dateStr;
 }

@@ -1,11 +1,12 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { KPasteService } from "../services/kpaste.js";
+import { safeHandler, textResult, jsonResult } from "../tool-handler.js";
 
 export function registerKPasteTools(server: McpServer, kpaste: KPasteService) {
   server.tool(
     "kpaste_create",
-    "Create an encrypted, ephemeral paste on kPaste (zero-knowledge, AES-256-GCM). Returns a one-time URL. Great for sharing passwords and secrets securely.",
+    "Create an encrypted, ephemeral paste on kPaste (zero-knowledge, AES-256-GCM). Returns a one-time URL. Great for sharing passwords and secrets securely. The encryption key is in the URL fragment (#) and never sent to the server.",
     {
       content: z.string().describe("The text/secret to share"),
       expiration: z
@@ -17,20 +18,13 @@ export function registerKPasteTools(server: McpServer, kpaste: KPasteService) {
         .optional()
         .describe("Auto-delete after first read (default: false)"),
     },
-    async ({ content, expiration, burn_after_reading }) => {
+    safeHandler(async ({ content, expiration, burn_after_reading }) => {
       const result = await kpaste.createPaste({
         content,
         expiration,
         burnAfterReading: burn_after_reading,
       });
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Encrypted paste created!\n\nURL: ${result.url}\nID: ${result.id}\n\nThe encryption key is in the URL fragment (#) and is never sent to the server.`,
-          },
-        ],
-      };
-    }
+      return textResult(`Encrypted paste created!\n\nURL: ${result.url}\nID: ${result.id}\n\nThe encryption key is in the URL fragment (#) and is never sent to the server.`);
+    })
   );
 }

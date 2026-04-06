@@ -20,7 +20,16 @@ export class ContactsService {
   }
 
   private async getClient(): Promise<DAVClient> {
-    if (this.client) return this.client;
+    if (this.client) {
+      // Test if the client is still valid by attempting a lightweight operation
+      try {
+        await this.client.fetchAddressBooks();
+        return this.client;
+      } catch {
+        // Client is stale, reconnect
+        this.client = null;
+      }
+    }
 
     const client = new DAVClient({
       serverUrl: this.config.cardDavUrl,
@@ -68,7 +77,6 @@ export class ContactsService {
     const client = await this.getClient();
     const addressBooks = await client.fetchAddressBooks();
 
-    // Find the address book that contains this contact
     for (const ab of addressBooks) {
       const vcards = await client.fetchVCards({
         addressBook: ab,
@@ -84,6 +92,8 @@ export class ContactsService {
   async createContact(
     params: {
       displayName: string;
+      firstName?: string;
+      lastName?: string;
       email?: string;
       phone?: string;
       organization?: string;
@@ -99,19 +109,36 @@ export class ContactsService {
     if (!targetBook) throw new Error("No address book found");
 
     const uid = crypto.randomUUID();
+
+    // Build structured name (N field required by vCard 3.0)
+    const lastName = params.lastName ?? "";
+    const firstName = params.firstName ?? "";
+    // If no first/last name given, try to split displayName
+    let nField: string;
+    if (lastName || firstName) {
+      nField = `${lastName};${firstName};;;`;
+    } else {
+      const parts = params.displayName.trim().split(/\s+/);
+      if (parts.length >= 2) {
+        nField = `${parts.slice(1).join(" ")};${parts[0]};;;`;
+      } else {
+        nField = `${params.displayName};;;;`;
+      }
+    }
+
     const lines = [
       "BEGIN:VCARD",
       "VERSION:3.0",
       `UID:${uid}`,
       `FN:${params.displayName}`,
+      `N:${nField}`,
     ];
-    if (params.email) lines.push(`EMAIL:${params.email}`);
-    if (params.phone) lines.push(`TEL:${params.phone}`);
+    if (params.email) lines.push(`EMAIL;TYPE=INTERNET:${params.email}`);
+    if (params.phone) lines.push(`TEL;TYPE=CELL:${params.phone}`);
     if (params.organization) lines.push(`ORG:${params.organization}`);
     lines.push("END:VCARD");
 
     const vcard = lines.join("\r\n");
-    const contactUrl = `${targetBook.url}${uid}.vcf`;
 
     await client.createVCard({
       addressBook: targetBook,
@@ -119,7 +146,7 @@ export class ContactsService {
       vCardString: vcard,
     });
 
-    return contactUrl;
+    return `${targetBook.url}${uid}.vcf`;
   }
 
   async updateContact(
@@ -146,16 +173,16 @@ export class ContactsService {
         }
         if (params.email) {
           if (data.match(/^EMAIL/m)) {
-            data = data.replace(/^EMAIL[^:]*:.*$/m, `EMAIL:${params.email}`);
+            data = data.replace(/^EMAIL[^:]*:.*$/m, `EMAIL;TYPE=INTERNET:${params.email}`);
           } else {
-            data = data.replace("END:VCARD", `EMAIL:${params.email}\r\nEND:VCARD`);
+            data = data.replace("END:VCARD", `EMAIL;TYPE=INTERNET:${params.email}\r\nEND:VCARD`);
           }
         }
         if (params.phone) {
           if (data.match(/^TEL/m)) {
-            data = data.replace(/^TEL[^:]*:.*$/m, `TEL:${params.phone}`);
+            data = data.replace(/^TEL[^:]*:.*$/m, `TEL;TYPE=CELL:${params.phone}`);
           } else {
-            data = data.replace("END:VCARD", `TEL:${params.phone}\r\nEND:VCARD`);
+            data = data.replace("END:VCARD", `TEL;TYPE=CELL:${params.phone}\r\nEND:VCARD`);
           }
         }
         if (params.organization) {
@@ -166,8 +193,17 @@ export class ContactsService {
           }
         }
 
+        // Build the vCard object for update, only include etag if present
+        const vCardObj: { data: string; url: string; etag?: string } = {
+          data,
+          url: contactUrl,
+        };
+        if (vcards[0].etag) {
+          vCardObj.etag = vcards[0].etag;
+        }
+
         await client.updateVCard({
-          vCard: { ...vcards[0], data, url: contactUrl, etag: vcards[0].etag ?? "" },
+          vCard: vCardObj as DAVVCard,
         });
         return;
       }
@@ -185,8 +221,13 @@ export class ContactsService {
         objectUrls: [contactUrl],
       });
       if (vcards.length > 0) {
+        const vCardObj: { url: string; etag?: string } = { url: contactUrl };
+        if (vcards[0].etag) {
+          vCardObj.etag = vcards[0].etag;
+        }
+
         await client.deleteVCard({
-          vCard: { url: contactUrl, etag: vcards[0].etag ?? "" },
+          vCard: vCardObj as DAVVCard,
         });
         return;
       }
@@ -197,12 +238,16 @@ export class ContactsService {
 
 function parseVCard(vc: DAVVCard): Contact {
   const data = (vc.data as string) ?? "";
+
+  // Handle vCard line folding: lines starting with space/tab are continuations
+  const unfolded = data.replace(/\r?\n[ \t]/g, "");
+
   const get = (field: string): string | undefined => {
-    const match = data.match(new RegExp(`^${field}[^:]*:(.*)$`, "mi"));
+    const match = unfolded.match(new RegExp(`^${field}[^:]*:(.*)$`, "mi"));
     return match?.[1]?.trim();
   };
   const getAll = (field: string): string[] => {
-    const matches = data.matchAll(new RegExp(`^${field}[^:]*:(.*)$`, "gmi"));
+    const matches = unfolded.matchAll(new RegExp(`^${field}[^:]*:(.*)$`, "gmi"));
     return Array.from(matches, (m) => m[1].trim());
   };
 

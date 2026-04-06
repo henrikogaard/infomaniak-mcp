@@ -7,18 +7,27 @@ export class InfomaniakAPI {
 
   async request(path: string, options: RequestInit = {}): Promise<unknown> {
     const url = `${BASE_URL}${path}`;
+    const method = options.method ?? "GET";
+
+    // Only set Content-Type for methods with body
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.config.infomaniakToken}`,
+    };
+    if (method === "POST" || method === "PUT" || method === "PATCH") {
+      headers["Content-Type"] = "application/json";
+    }
+
     const res = await fetch(url, {
       ...options,
       headers: {
-        Authorization: `Bearer ${this.config.infomaniakToken}`,
-        "Content-Type": "application/json",
-        ...options.headers,
+        ...headers,
+        ...(options.headers as Record<string, string> | undefined),
       },
     });
 
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`Infomaniak API ${res.status}: ${body}`);
+      throw new Error(`Infomaniak API ${method} ${path} → ${res.status}: ${body}`);
     }
 
     const contentType = res.headers.get("content-type") ?? "";
@@ -62,5 +71,25 @@ export class InfomaniakAPI {
       throw new Error(`Infomaniak download ${res.status}: ${await res.text()}`);
     }
     return Buffer.from(await res.arrayBuffer());
+  }
+
+  async uploadRaw(path: string, body: Buffer, contentType: string): Promise<unknown> {
+    const url = `${BASE_URL}${path}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.config.infomaniakToken}`,
+        "Content-Type": contentType,
+      },
+      body: new Uint8Array(body),
+    });
+    if (!res.ok) {
+      throw new Error(`Infomaniak upload ${res.status}: ${await res.text()}`);
+    }
+    const ct = res.headers.get("content-type") ?? "";
+    if (ct.includes("application/json")) {
+      return res.json();
+    }
+    return res.text();
   }
 }

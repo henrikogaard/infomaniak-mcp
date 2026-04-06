@@ -1,19 +1,25 @@
 import type { Config } from "../config.js";
+import * as crypto from "node:crypto";
+import * as zlib from "node:zlib";
+import { promisify } from "node:util";
+
+const deflateRaw = promisify(zlib.deflateRaw);
 
 interface PasteResult {
   url: string;
   id: string;
-  expiresAt?: string;
 }
 
 /**
  * kPaste — Encrypted ephemeral secret sharing.
  *
- * kPaste uses client-side AES-256-GCM encryption. The encryption key
- * is appended to the URL fragment (after #) and never sent to the server.
- * This means the server cannot read the content — true zero-knowledge.
+ * kPaste is based on PrivateBin v2 protocol.
+ * - Content is zlib-compressed, then encrypted with AES-256-GCM.
+ * - The AES key is derived via PBKDF2 from a random master key (+ optional password).
+ * - The master key goes in the URL fragment (#) — never sent to the server.
+ * - True zero-knowledge: the server cannot decrypt the content.
  *
- * API: https://kpaste.infomaniak.com
+ * Protocol reference: https://github.com/PrivateBin/PrivateBin/wiki/API
  */
 export class KPasteService {
   private baseUrl = "https://kpaste.infomaniak.com";
@@ -26,53 +32,76 @@ export class KPasteService {
     burnAfterReading?: boolean;
     password?: string;
   }): Promise<PasteResult> {
-    // kPaste uses client-side encryption with PrivateBin protocol.
-    // We need to encrypt the content locally before sending.
-    const crypto = await import("node:crypto");
+    // PrivateBin v2 encryption protocol
 
-    // Generate encryption key and IV
-    const key = crypto.randomBytes(32);
-    const iv = crypto.randomBytes(16);
+    // 1. Generate random master key (256 bits) and paste IV (12 bytes for GCM)
+    const masterKey = crypto.randomBytes(32);
+    const iv = crypto.randomBytes(12);
+    const salt = crypto.randomBytes(8);
 
-    // Encrypt content using AES-256-GCM
-    const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-    let encrypted = cipher.update(params.content, "utf8");
-    encrypted = Buffer.concat([encrypted, cipher.final()]);
+    const iterations = 100000;
+    const keySize = 256;
+    const tagBits = 128;
+
+    // 2. Derive AES key via PBKDF2
+    // If password is set, it's concatenated with the master key
+    const passphraseInput = params.password
+      ? Buffer.concat([masterKey, Buffer.from(params.password, "utf8")])
+      : masterKey;
+
+    const derivedKey = crypto.pbkdf2Sync(passphraseInput, salt, iterations, keySize / 8, "sha256");
+
+    // 3. Build the adata (additional authenticated data) array
+    // Format: [[iv_b64, salt_b64, iterations, keysize, tagsize, algo, mode, compression], format, openDiscussion, burnAfterReading]
+    const adata: unknown[] = [
+      [
+        iv.toString("base64"),
+        salt.toString("base64"),
+        iterations,
+        keySize,
+        tagBits,
+        "aes",
+        "gcm",
+        "rawdeflate",
+      ],
+      "plaintext",
+      0, // openDiscussion
+      params.burnAfterReading ? 1 : 0,
+    ];
+
+    const adataJson = JSON.stringify(adata);
+
+    // 4. Compress the content with raw deflate
+    const pasteContent = JSON.stringify({ paste: params.content });
+    const compressed = await deflateRaw(Buffer.from(pasteContent, "utf8"));
+
+    // 5. Encrypt with AES-256-GCM, using adata as AAD
+    const cipher = crypto.createCipheriv("aes-256-gcm", derivedKey, iv);
+    cipher.setAAD(Buffer.from(adataJson, "utf8"));
+    const encrypted = Buffer.concat([cipher.update(compressed), cipher.final()]);
     const authTag = cipher.getAuthTag();
 
-    // Combine IV + authTag + encrypted data
-    const payload = Buffer.concat([iv, authTag, encrypted]);
-    const payloadBase64 = payload.toString("base64");
+    // 6. ct = base64(ciphertext + authTag)
+    const ct = Buffer.concat([encrypted, authTag]).toString("base64");
 
-    // Map expiration to seconds
-    const expirationMap: Record<string, number> = {
-      "5min": 300,
-      "1hour": 3600,
-      "1day": 86400,
-      "1week": 604800,
-      "1month": 2592000,
+    // 7. Map expiration
+    const expirationMap: Record<string, string> = {
+      "5min": "5min",
+      "1hour": "1hour",
+      "1day": "1day",
+      "1week": "1week",
+      "1month": "1month",
     };
-    const expireSeconds = expirationMap[params.expiration ?? "1day"] ?? 86400;
 
-    // Post to kPaste API
+    // 8. Build and send the request
     const body = {
       v: 2,
-      ct: payloadBase64,
-      adata: [
-        [iv.toString("base64"), authTag.toString("base64"), 256, 10000, 32, "aes", "gcm", "none"],
-        "plaintext",
-        params.burnAfterReading ? 1 : 0,
-        0,
-      ],
+      adata,
+      ct,
       meta: {
-        expire: `${expireSeconds}`,
+        expire: expirationMap[params.expiration ?? "1day"] ?? "1day",
       },
     };
-
-    if (params.password) {
-      // When a password is set, it's used as additional PBKDF2 input
-      // For simplicity, we note this in the response
-    }
 
     const res = await fetch(this.baseUrl, {
       method: "POST",
@@ -89,8 +118,12 @@ export class KPasteService {
 
     const result = (await res.json()) as { id: string; url: string; status: number; deletetoken?: string };
 
-    // The key goes in the URL fragment — server never sees it
-    const keyBase58 = encodeBase58(key);
+    if (result.status !== 0) {
+      throw new Error(`kPaste error: ${JSON.stringify(result)}`);
+    }
+
+    // 9. The master key goes in the URL fragment — server never sees it
+    const keyBase58 = encodeBase58(masterKey);
     const pasteUrl = `${this.baseUrl}${result.url}#${keyBase58}`;
 
     return {
@@ -101,10 +134,11 @@ export class KPasteService {
 }
 
 /**
- * Simple base58 encoding (Bitcoin alphabet) for the encryption key in the URL fragment.
+ * Base58 encoding (Bitcoin alphabet) for the encryption key in the URL fragment.
  */
 function encodeBase58(buffer: Buffer): string {
   const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  if (buffer.length === 0) return "1";
   let num = BigInt("0x" + buffer.toString("hex"));
   const chars: string[] = [];
   while (num > 0n) {

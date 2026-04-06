@@ -1,4 +1,4 @@
-import { ImapFlow, type FetchMessageObject, type MailboxObject } from "imapflow";
+import { ImapFlow } from "imapflow";
 import { createTransport, type Transporter } from "nodemailer";
 import { simpleParser, type ParsedMail } from "mailparser";
 import type { Config } from "../config.js";
@@ -35,7 +35,7 @@ export class MailService {
     });
   }
 
-  async listFolders(): Promise<Array<{ name: string; path: string; specialUse?: string; totalMessages?: number }>> {
+  async listFolders(): Promise<Array<{ name: string; path: string; specialUse?: string }>> {
     const client = this.createImapClient();
     try {
       await client.connect();
@@ -66,7 +66,7 @@ export class MailService {
 
       if (total === 0) return { messages: [], total: 0 };
 
-      // Calculate range (newest first)
+      // Calculate range (newest first by sequence number)
       const end = Math.max(1, total - (page - 1) * limit);
       const start = Math.max(1, end - limit + 1);
       const range = `${start}:${end}`;
@@ -115,6 +115,7 @@ export class MailService {
     to: string[];
     cc: string[];
     date: string;
+    messageId: string;
     text: string;
     html: string;
     attachments: Array<{ filename: string; contentType: string; size: number }>;
@@ -146,6 +147,7 @@ export class MailService {
             ? [parsed.cc.text]
             : [],
         date: parsed.date?.toISOString() ?? "",
+        messageId: parsed.messageId ?? "",
         text: parsed.text ?? "",
         html: parsed.html || "",
         attachments: (parsed.attachments ?? []).map((a) => ({
@@ -171,7 +173,17 @@ export class MailService {
       await client.connect();
       await client.mailboxOpen(folder);
 
-      // Search by subject or body containing the query
+      // Use IMAP SEARCH to find matching UIDs first, then fetch envelopes
+      const uids = await client.search(
+        { or: [{ subject: query }, { body: query }, { from: query }] },
+        { uid: true }
+      );
+
+      if (!uids || uids.length === 0) return [];
+
+      // Take the last N UIDs (newest messages)
+      const targetUids = uids.slice(-limit);
+
       const results: Array<{
         uid: number;
         subject: string;
@@ -179,12 +191,10 @@ export class MailService {
         date: string;
       }> = [];
 
-      // IMAP OR search: subject or body
-      for await (const msg of client.fetch(
-        { or: [{ subject: query }, { body: query }, { from: query }] },
-        { uid: true, envelope: true },
-        { uid: false }
-      )) {
+      for await (const msg of client.fetch(targetUids.join(","), {
+        uid: true,
+        envelope: true,
+      }, { uid: true })) {
         results.push({
           uid: msg.uid,
           subject: msg.envelope?.subject ?? "(no subject)",
@@ -193,9 +203,9 @@ export class MailService {
             : "(unknown)",
           date: msg.envelope?.date?.toISOString() ?? "",
         });
-        if (results.length >= limit) break;
       }
 
+      // Newest first
       results.reverse();
       return results;
     } finally {
@@ -210,7 +220,8 @@ export class MailService {
     subject: string;
     text?: string;
     html?: string;
-    replyTo?: string;
+    inReplyTo?: string;
+    references?: string[];
   }): Promise<{ messageId: string }> {
     const transport = this.createSmtpTransport();
     const info = await transport.sendMail({
@@ -221,7 +232,8 @@ export class MailService {
       subject: params.subject,
       text: params.text,
       html: params.html,
-      inReplyTo: params.replyTo,
+      inReplyTo: params.inReplyTo,
+      references: params.references?.join(" "),
     });
     return { messageId: info.messageId };
   }

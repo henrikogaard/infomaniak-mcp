@@ -55,6 +55,32 @@ export class KDriveService {
     return buf.toString("base64");
   }
 
+  async uploadFile(folderId: number, filename: string, base64Content: string): Promise<FileEntry> {
+    const fileBuffer = Buffer.from(base64Content, "base64");
+    const boundary = `----FormBoundary${Date.now()}`;
+
+    const parts: Buffer[] = [];
+    const header = [
+      `--${boundary}`,
+      `Content-Disposition: form-data; name="file"; filename="${filename}"`,
+      "Content-Type: application/octet-stream",
+      "",
+      "",
+    ].join("\r\n");
+    parts.push(Buffer.from(header));
+    parts.push(fileBuffer);
+    parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+
+    const body = Buffer.concat(parts);
+
+    const res = await this.api.uploadRaw(
+      `/2/drive/${this.driveId}/files/${folderId}/upload`,
+      body,
+      `multipart/form-data; boundary=${boundary}`
+    );
+    return (res as ApiResponse).data as FileEntry;
+  }
+
   async createFolder(parentId: number, name: string): Promise<FileEntry> {
     const res = (await this.api.post(
       `/2/drive/${this.driveId}/files/${parentId}/folder`,
