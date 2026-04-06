@@ -19,7 +19,15 @@ export class MailService {
         user: this.config.mailUser,
         pass: this.config.mailPassword,
       },
-      logger: false,
+      logger: {
+        debug: () => {},
+        info: () => {},
+        warn: (msg: unknown) => console.error("[IMAP warn]", msg),
+        error: (msg: unknown) => console.error("[IMAP error]", msg),
+      },
+      tls: {
+        rejectUnauthorized: true,
+      },
     });
   }
 

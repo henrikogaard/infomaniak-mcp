@@ -1,15 +1,20 @@
 import type { Config } from "../config.js";
 
 interface TransferInit {
-  containerUUID: string;
-  uploadHost: string;
-  filesUUID: Record<string, string>;
+  container?: {
+    UUID?: string;
+    type?: string;
+    [key: string]: unknown;
+  };
+  uploadHost?: string;
+  filesUUID?: string[] | Record<string, string>;
   [key: string]: unknown;
 }
 
 interface TransferResult {
   linkUrl: string;
   containerUUID: string;
+  completion?: unknown;
   [key: string]: unknown;
 }
 
@@ -35,6 +40,7 @@ interface TransferInfo {
  */
 export class SwissTransferService {
   private apiBase = "https://www.swisstransfer.com/api";
+  private chunkSize = 50 * 1024 * 1024;
 
   constructor(_config: Config) {}
 
@@ -45,18 +51,45 @@ export class SwissTransferService {
     password?: string;
     expirationDays?: number;
     downloadLimit?: number;
+    authorEmail?: string;
+    recaptchaToken?: string;
+    recaptchaVersion?: number;
   }): Promise<TransferResult> {
+    if (!params.recaptchaToken) {
+      throw new Error(
+        "Swiss Transfer experimental upload requires a browser-generated reCAPTCHA token from swisstransfer.com. " +
+        "Google documents that reCAPTCHA v3 tokens are generated client-side with execute() and expire after about two minutes."
+      );
+    }
+
+    const files = params.files.map((file) => {
+      const buffer = Buffer.from(file.base64Content, "base64");
+      return {
+        name: file.name,
+        buffer,
+        size: buffer.length,
+        type: guessMimeType(file.name),
+      };
+    });
+
+    const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+
     // Step 1: Initialize the transfer container
     const initBody: Record<string, unknown> = {
       duration: String(params.expirationDays ?? 30),
-      authorEmail: "",
+      authorEmail: params.authorEmail ?? "",
       message: params.message ?? "",
+      sizeOfUpload: totalSize,
       numberOfDownload: params.downloadLimit ?? 250,
-      language: "en",
+      numberOfFile: files.length,
+      lang: "en",
       recipientsEmails: params.recipients ?? [],
-      files: params.files.map((f) => ({
-        name: f.name,
-        size: Buffer.from(f.base64Content, "base64").length,
+      recaptcha: params.recaptchaToken,
+      recaptchaVersion: params.recaptchaVersion ?? 3,
+      files: files.map((file) => ({
+        name: file.name,
+        size: file.size,
+        type: file.type,
       })),
     };
 
@@ -64,82 +97,140 @@ export class SwissTransferService {
       initBody.password = params.password;
     }
 
-    const initRes = await fetch(`${this.apiBase}/v1/upload/init`, {
+    const initRes = await fetch(`${this.apiBase}/containers`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(initBody),
     });
 
     if (!initRes.ok) {
-      throw new Error(`Swiss Transfer init failed (${initRes.status}): ${await initRes.text()}`);
+      const responseText = await initRes.text();
+      if (initRes.status === 403 || initRes.status === 404) {
+        throw new Error(
+          "Swiss Transfer experimental upload was rejected by the live anti-abuse layer. " +
+          "The live site uses /api/containers, /api/uploadChunk/*, and /api/uploadComplete, and container creation requires fields like recaptcha and recaptchaVersion. " +
+          `Original response (${initRes.status}): ${responseText}`
+        );
+      }
+      throw new Error(`Swiss Transfer container init failed (${initRes.status}): ${responseText}`);
     }
 
     const init = (await initRes.json()) as TransferInit;
+    const containerUUID = init.container?.UUID;
+    const uploadHost = init.uploadHost;
+
+    if (!containerUUID || !uploadHost) {
+      throw new Error(`Swiss Transfer container init returned an unexpected payload: ${JSON.stringify(init)}`);
+    }
+
+    const fileUUIDs = normalizeFileUUIDs(init.filesUUID, files.map((file) => file.name));
 
     // Step 2: Upload each file
-    for (const file of params.files) {
-      const fileBuffer = Buffer.from(file.base64Content, "base64");
-      const fileUUID = init.filesUUID?.[file.name];
+    for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
+      const file = files[fileIndex];
+      const fileUUID = fileUUIDs[fileIndex];
 
       if (!fileUUID) {
         throw new Error(`No UUID returned for file "${file.name}"`);
       }
 
-      const uploadUrl = `${init.uploadHost}/v1/upload/${init.containerUUID}/${fileUUID}`;
+      const chunks = splitIntoChunks(file.buffer, this.chunkSize);
+      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+        const chunk = chunks[chunkIndex];
+        const isLastChunk = chunkIndex === chunks.length - 1 ? 1 : 0;
+        const uploadUrl = `https://${uploadHost}${this.apiBase}/uploadChunk/${containerUUID}/${fileUUID}/${chunkIndex}/${isLastChunk}`;
 
-      const boundary = `----FormBoundary${Date.now()}`;
-      const parts: Buffer[] = [];
+        const uploadRes = await fetch(uploadUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/octet-stream",
+          },
+          body: new Uint8Array(chunk),
+        });
 
-      const header = [
-        `--${boundary}`,
-        `Content-Disposition: form-data; name="file"; filename="${file.name}"`,
-        "Content-Type: application/octet-stream",
-        "",
-        "",
-      ].join("\r\n");
-      parts.push(Buffer.from(header));
-      parts.push(fileBuffer);
-      parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
-
-      const body = Buffer.concat(parts);
-
-      const uploadRes = await fetch(uploadUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": `multipart/form-data; boundary=${boundary}`,
-        },
-        body,
-      });
-
-      if (!uploadRes.ok) {
-        throw new Error(`Swiss Transfer upload failed for "${file.name}" (${uploadRes.status}): ${await uploadRes.text()}`);
+        if (!uploadRes.ok) {
+          throw new Error(`Swiss Transfer upload failed for "${file.name}" chunk ${chunkIndex} (${uploadRes.status}): ${await uploadRes.text()}`);
+        }
       }
     }
 
     // Step 3: Finalize
-    const finalizeRes = await fetch(`${this.apiBase}/v1/upload/complete`, {
+    const finalizeRes = await fetch(`${this.apiBase}/uploadComplete`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ containerUUID: init.containerUUID }),
+      body: JSON.stringify({
+        UUID: containerUUID,
+        lang: "en",
+        recipientsEmails: params.recipients ?? [],
+      }),
     });
 
     if (!finalizeRes.ok) {
       throw new Error(`Swiss Transfer finalize failed (${finalizeRes.status}): ${await finalizeRes.text()}`);
     }
 
-    const result = (await finalizeRes.json()) as TransferResult;
+    const completion = (await finalizeRes.json()) as unknown;
     return {
-      ...result,
-      linkUrl: result.linkUrl ?? `https://www.swisstransfer.com/d/${init.containerUUID}`,
-      containerUUID: init.containerUUID,
+      linkUrl: `https://www.swisstransfer.com/d/${containerUUID}`,
+      containerUUID,
+      uploadHost,
+      completion,
     };
   }
 
-  async getTransferInfo(transferId: string): Promise<TransferInfo> {
-    const res = await fetch(`${this.apiBase}/v1/transfer/${transferId}`);
+  async getTransferInfo(transferId: string, password?: string): Promise<TransferInfo> {
+    const headers: Record<string, string> = {};
+    if (password) {
+      headers.Authorization = Buffer.from(encodeURIComponent(password), "utf8").toString("base64");
+    }
+
+    const res = await fetch(`${this.apiBase}/links/${transferId}`, {
+      headers,
+    });
     if (!res.ok) {
       throw new Error(`Swiss Transfer info ${res.status}: ${await res.text()}`);
     }
     return (await res.json()) as TransferInfo;
+  }
+}
+
+function normalizeFileUUIDs(value: TransferInit["filesUUID"], names: string[]): string[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    return names.map((name) => value[name]).filter((entry): entry is string => typeof entry === "string");
+  }
+  return [];
+}
+
+function splitIntoChunks(buffer: Buffer, chunkSize: number): Buffer[] {
+  const chunks: Buffer[] = [];
+  for (let offset = 0; offset < buffer.length; offset += chunkSize) {
+    chunks.push(buffer.subarray(offset, Math.min(offset + chunkSize, buffer.length)));
+  }
+  return chunks;
+}
+
+function guessMimeType(filename: string): string {
+  const extension = filename.split(".").pop()?.toLowerCase() ?? "";
+  switch (extension) {
+    case "txt":
+      return "text/plain";
+    case "pdf":
+      return "application/pdf";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "png":
+      return "image/png";
+    case "gif":
+      return "image/gif";
+    case "zip":
+      return "application/zip";
+    case "csv":
+      return "text/csv";
+    default:
+      return "application/octet-stream";
   }
 }

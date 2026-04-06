@@ -31,18 +31,46 @@ export class ContactsService {
       }
     }
 
+    console.error(`[CardDAV] Connecting to ${this.config.cardDavUrl} as ${this.config.davUser}`);
+
     const client = new DAVClient({
       serverUrl: this.config.cardDavUrl,
       credentials: {
-        username: this.config.mailUser,
-        password: this.config.mailPassword,
+        username: this.config.davUser,
+        password: this.config.davPassword,
       },
       authMethod: "Basic",
       defaultAccountType: "carddav",
     });
-    await client.login();
-    this.client = client;
 
+    try {
+      await client.login();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[CardDAV] Login failed: ${msg}`);
+
+      // If standard discovery fails, try with .well-known path appended
+      if (msg.includes("homeUrl")) {
+        console.error("[CardDAV] Retrying with /.well-known/carddav appended to serverUrl");
+        const fallbackClient = new DAVClient({
+          serverUrl: `${this.config.cardDavUrl.replace(/\/+$/, "")}/.well-known/carddav`,
+          credentials: {
+            username: this.config.davUser,
+            password: this.config.davPassword,
+          },
+          authMethod: "Basic",
+          defaultAccountType: "carddav",
+        });
+        await fallbackClient.login();
+        this.client = fallbackClient;
+        console.error("[CardDAV] Connected (via .well-known fallback)");
+        return this.client;
+      }
+      throw err;
+    }
+
+    this.client = client;
+    console.error("[CardDAV] Connected successfully");
     return this.client;
   }
 

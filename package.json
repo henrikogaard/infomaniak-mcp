@@ -1,5 +1,5 @@
 {
-  "name": "@infomaniak/mcp-server-ksuite",
+  "name": "@henrikogard/infomaniak-mcp",
   "version": "0.1.0",
   "description": "Unified MCP server for Infomaniak kSuite — kDrive, Calendar, Mail (IMAP/SMTP), and Contacts (CardDAV)",
   "type": "module",
@@ -7,10 +7,19 @@
   "bin": {
     "mcp-server-infomaniak": "dist/index.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "docs",
+    "scripts"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "smoke:live": "node scripts/live-smoke.mjs",
+    "swisstransfer:helper": "node scripts/swisstransfer-token-helper.mjs"
   },
   "keywords": [
     "mcp",
@@ -25,6 +34,7 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
+    "dotenv": "^16.6.1",
     "imapflow": "^1.0.172",
     "mailparser": "^3.7.2",
     "nodemailer": "^6.10.1",

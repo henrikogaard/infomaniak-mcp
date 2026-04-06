@@ -19,10 +19,12 @@ interface FileEntry {
 export class KDriveService {
   private api: InfomaniakAPI;
   private driveId: string;
+  private token: string;
 
   constructor(config: Config) {
     this.api = new InfomaniakAPI(config);
     this.driveId = config.kdriveId;
+    this.token = config.infomaniakToken;
   }
 
   async searchFiles(query: string, limit = 20): Promise<FileEntry[]> {
@@ -57,33 +59,36 @@ export class KDriveService {
 
   async uploadFile(folderId: number, filename: string, base64Content: string): Promise<FileEntry> {
     const fileBuffer = Buffer.from(base64Content, "base64");
-    const boundary = `----FormBoundary${Date.now()}`;
+    const timestamp = Math.floor(Date.now() / 1000);
+    const params = new URLSearchParams({
+      directory_id: String(folderId),
+      file_name: filename.replaceAll("/", ":"),
+      created_date: String(timestamp),
+      last_modified_at: String(timestamp),
+      total_size: String(fileBuffer.length),
+      conflict: "rename",
+    });
 
-    const parts: Buffer[] = [];
-    const header = [
-      `--${boundary}`,
-      `Content-Disposition: form-data; name="file"; filename="${filename}"`,
-      "Content-Type: application/octet-stream",
-      "",
-      "",
-    ].join("\r\n");
-    parts.push(Buffer.from(header));
-    parts.push(fileBuffer);
-    parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+    const res = await fetch(`https://api.infomaniak.com/3/drive/${this.driveId}/upload?${params.toString()}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        "Content-Type": "application/octet-stream",
+      },
+      body: fileBuffer,
+    });
 
-    const body = Buffer.concat(parts);
+    if (!res.ok) {
+      throw new Error(`Infomaniak upload ${res.status}: ${await res.text()}`);
+    }
 
-    const res = await this.api.uploadRaw(
-      `/2/drive/${this.driveId}/files/${folderId}/upload`,
-      body,
-      `multipart/form-data; boundary=${boundary}`
-    );
-    return (res as ApiResponse).data as FileEntry;
+    const data = (await res.json()) as ApiResponse;
+    return data.data as FileEntry;
   }
 
   async createFolder(parentId: number, name: string): Promise<FileEntry> {
     const res = (await this.api.post(
-      `/2/drive/${this.driveId}/files/${parentId}/folder`,
+      `/2/drive/${this.driveId}/files/${parentId}/directory`,
       { name }
     )) as ApiResponse;
     return res.data as FileEntry;
@@ -105,7 +110,7 @@ export class KDriveService {
   }
 
   async renameFile(fileId: number, name: string): Promise<FileEntry> {
-    const res = (await this.api.put(
+    const res = (await this.api.post(
       `/2/drive/${this.driveId}/files/${fileId}/rename`,
       { name }
     )) as ApiResponse;

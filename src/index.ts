@@ -29,6 +29,14 @@ const server = new McpServer({
   version: "0.1.0",
 });
 
+function hasAnyCredential(...values: string[]): boolean {
+  return values.some((value) => value.trim().length > 0);
+}
+
+function isConfigured(value: string): boolean {
+  return value.trim().length > 0;
+}
+
 // ── kDrive ──
 if (config.infomaniakToken && config.kdriveId) {
   registerKDriveTools(server, new KDriveService(config));
@@ -60,9 +68,9 @@ if (config.infomaniakToken) {
 }
 
 // ── Swiss Transfer ──
-if (config.infomaniakToken) {
+if (config.infomaniakToken && config.enableExperimentalSwissTransfer) {
   registerSwissTransferTools(server, new SwissTransferService(config));
-  console.error("[infomaniak-mcp] Swiss Transfer enabled");
+  console.error("[infomaniak-mcp] Swiss Transfer enabled (experimental)");
 }
 
 // ── kPaste ──
@@ -75,15 +83,52 @@ if (config.infomaniakToken) {
 if (config.mailUser && config.mailPassword) {
   registerMailTools(server, new MailService(config));
   console.error("[infomaniak-mcp] Mail tools enabled (IMAP/SMTP)");
+}
 
+// ── Contacts (CardDAV) ──
+if (config.davUser && config.davPassword) {
   registerContactsTools(server, new ContactsService(config));
   console.error("[infomaniak-mcp] Contacts tools enabled (CardDAV)");
 }
 
 // ── Warnings ──
-if (!config.infomaniakToken && !config.mailUser) {
+if (!config.infomaniakToken && !config.mailUser && !config.davUser) {
   console.error(
-    "[infomaniak-mcp] Warning: No credentials configured. Set INFOMANIAK_TOKEN and/or MAIL_USER + MAIL_PASSWORD."
+    "[infomaniak-mcp] Warning: No credentials configured. Set INFOMANIAK_TOKEN, MAIL_USER + MAIL_PASSWORD, and/or DAV_USER + DAV_PASSWORD."
+  );
+  console.error(
+    "[infomaniak-mcp] Hint: Claude does not automatically inherit your shell exports. Put credentials in the MCP server env block or in a local .env file."
+  );
+}
+
+if (isConfigured(config.infomaniakToken) && !isConfigured(config.kdriveId)) {
+  console.error(
+    "[infomaniak-mcp] Warning: INFOMANIAK_TOKEN is set but KDRIVE_ID is missing, so kDrive tools are disabled."
+  );
+}
+
+if (isConfigured(config.infomaniakToken) && !config.enableExperimentalSwissTransfer) {
+  console.error(
+    "[infomaniak-mcp] Note: Swiss Transfer tools are disabled by default because the live upload flow is still experimental. Set ENABLE_EXPERIMENTAL_SWISSTRANSFER=1 to opt in."
+  );
+}
+
+if (hasAnyCredential(config.mailUser, config.mailPassword) && !(isConfigured(config.mailUser) && isConfigured(config.mailPassword))) {
+  console.error(
+    "[infomaniak-mcp] Warning: MAIL_USER and MAIL_PASSWORD must both be set or mail tools stay disabled."
+  );
+}
+
+if (hasAnyCredential(process.env.DAV_USER ?? "", process.env.DAV_PASSWORD ?? "") &&
+  !(isConfigured(process.env.DAV_USER ?? "") && isConfigured(process.env.DAV_PASSWORD ?? ""))) {
+  console.error(
+    "[infomaniak-mcp] Warning: DAV_USER and DAV_PASSWORD must both be set or contacts tools may fail to authenticate."
+  );
+}
+
+if (!isConfigured(process.env.DAV_USER ?? "") && isConfigured(config.mailUser) && config.mailUser.includes("@")) {
+  console.error(
+    "[infomaniak-mcp] Note: Contacts fall back to MAIL_USER/MAIL_PASSWORD, but Infomaniak CardDAV usually expects DAV_USER to be your short username (for example AB12345), not your email address."
   );
 }
 

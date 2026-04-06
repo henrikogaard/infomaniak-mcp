@@ -3,7 +3,7 @@ import * as crypto from "node:crypto";
 import * as zlib from "node:zlib";
 import { promisify } from "node:util";
 
-const deflateRaw = promisify(zlib.deflateRaw);
+const deflate = promisify(zlib.deflate);
 
 interface PasteResult {
   url: string;
@@ -22,7 +22,8 @@ interface PasteResult {
  * Protocol reference: https://github.com/PrivateBin/PrivateBin/wiki/API
  */
 export class KPasteService {
-  private baseUrl = "https://kpaste.infomaniak.com";
+  private siteUrl = "https://kpaste.infomaniak.com";
+  private apiUrl = "https://welcome.infomaniak.com/api/components/paste";
 
   constructor(_config: Config) {}
 
@@ -32,82 +33,21 @@ export class KPasteService {
     burnAfterReading?: boolean;
     password?: string;
   }): Promise<PasteResult> {
-    // PrivateBin v2 encryption protocol
-
-    // 1. Generate random master key (256 bits) and paste IV (12 bytes for GCM)
-    const masterKey = crypto.randomBytes(32);
-    const iv = crypto.randomBytes(12);
-    const salt = crypto.randomBytes(8);
-
-    const iterations = 100000;
-    const keySize = 256;
-    const tagBits = 128;
-
-    // 2. Derive AES key via PBKDF2
-    // If password is set, it's concatenated with the master key
-    const passphraseInput = params.password
-      ? Buffer.concat([masterKey, Buffer.from(params.password, "utf8")])
-      : masterKey;
-
-    const derivedKey = crypto.pbkdf2Sync(passphraseInput, salt, iterations, keySize / 8, "sha256");
-
-    // 3. Build the adata (additional authenticated data) array
-    // Format: [[iv_b64, salt_b64, iterations, keysize, tagsize, algo, mode, compression], format, openDiscussion, burnAfterReading]
-    const adata: unknown[] = [
-      [
-        iv.toString("base64"),
-        salt.toString("base64"),
-        iterations,
-        keySize,
-        tagBits,
-        "aes",
-        "gcm",
-        "rawdeflate",
-      ],
-      "plaintext",
-      0, // openDiscussion
-      params.burnAfterReading ? 1 : 0,
-    ];
-
-    const adataJson = JSON.stringify(adata);
-
-    // 4. Compress the content with raw deflate
-    const pasteContent = JSON.stringify({ paste: params.content });
-    const compressed = await deflateRaw(Buffer.from(pasteContent, "utf8"));
-
-    // 5. Encrypt with AES-256-GCM, using adata as AAD
-    const cipher = crypto.createCipheriv("aes-256-gcm", derivedKey, iv);
-    cipher.setAAD(Buffer.from(adataJson, "utf8"));
-    const encrypted = Buffer.concat([cipher.update(compressed), cipher.final()]);
-    const authTag = cipher.getAuthTag();
-
-    // 6. ct = base64(ciphertext + authTag)
-    const ct = Buffer.concat([encrypted, authTag]).toString("base64");
-
-    // 7. Map expiration
-    const expirationMap: Record<string, string> = {
-      "5min": "5min",
-      "1hour": "1hour",
-      "1day": "1day",
-      "1week": "1week",
-      "1month": "1month",
-    };
-
-    // 8. Build and send the request
+    const encrypted = await encryptPaste(params.content, params.password ?? "");
     const body = {
-      v: 2,
-      adata,
-      ct,
-      meta: {
-        expire: expirationMap[params.expiration ?? "1day"] ?? "1day",
-      },
+      data: encrypted.message,
+      vector: encrypted.vector,
+      salt: encrypted.salt,
+      burn: params.burnAfterReading ?? false,
+      validity: mapExpiration(params.expiration),
+      password: Boolean(params.password),
     };
 
-    const res = await fetch(this.baseUrl, {
+    const res = await fetch(this.apiUrl, {
       method: "POST",
       headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "X-Requested-With": "JSONHttpRequest",
+        Accept: "application/json",
+        "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
     });
@@ -116,26 +56,18 @@ export class KPasteService {
       throw new Error(`kPaste ${res.status}: ${await res.text()}`);
     }
 
-    const result = (await res.json()) as { id: string; url: string; status: number; deletetoken?: string };
-
-    if (result.status !== 0) {
+    const result = (await res.json()) as { result?: string; data?: string; error?: unknown };
+    if (result.result !== "success" || !result.data) {
       throw new Error(`kPaste error: ${JSON.stringify(result)}`);
     }
 
-    // 9. The master key goes in the URL fragment — server never sees it
-    const keyBase58 = encodeBase58(masterKey);
-    const pasteUrl = `${this.baseUrl}${result.url}#${keyBase58}`;
-
     return {
-      url: pasteUrl,
-      id: result.id,
+      url: `${this.siteUrl}/${result.data}#${encrypted.key}`,
+      id: result.data,
     };
   }
 }
 
-/**
- * Base58 encoding (Bitcoin alphabet) for the encryption key in the URL fragment.
- */
 function encodeBase58(buffer: Buffer): string {
   const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
   if (buffer.length === 0) return "1";
@@ -152,4 +84,65 @@ function encodeBase58(buffer: Buffer): string {
     else break;
   }
   return chars.join("") || "1";
+}
+
+function randomBinaryString(byteLength: number): string {
+  return crypto.randomBytes(byteLength).toString("latin1");
+}
+
+function binaryStringToBuffer(value: string): Buffer {
+  return Buffer.from(value, "latin1");
+}
+
+function utf16ToUtf8Binary(value: string): string {
+  return unescape(encodeURIComponent(value));
+}
+
+async function encryptPaste(content: string, password: string): Promise<{
+  key: string;
+  vector: string;
+  salt: string;
+  message: string;
+}> {
+  const key = randomBinaryString(32);
+  const vector = randomBinaryString(16);
+  const salt = randomBinaryString(8);
+
+  let keyMaterial = binaryStringToBuffer(key);
+  if (password.length > 0) {
+    keyMaterial = Buffer.concat([keyMaterial, binaryStringToBuffer(password)]);
+  }
+
+  const derivedKey = crypto.pbkdf2Sync(
+    keyMaterial,
+    binaryStringToBuffer(salt),
+    100000,
+    32,
+    "sha256"
+  );
+
+  const compressed = await deflate(binaryStringToBuffer(utf16ToUtf8Binary(content)));
+  const cipher = crypto.createCipheriv("aes-256-gcm", derivedKey, binaryStringToBuffer(vector), {
+    authTagLength: 16,
+  });
+  const encrypted = Buffer.concat([cipher.update(compressed), cipher.final(), cipher.getAuthTag()]);
+
+  return {
+    key: encodeBase58(binaryStringToBuffer(key)),
+    vector: binaryStringToBuffer(vector).toString("base64"),
+    salt: binaryStringToBuffer(salt).toString("base64"),
+    message: encrypted.toString("base64"),
+  };
+}
+
+function mapExpiration(expiration?: "5min" | "1hour" | "1day" | "1week" | "1month"): string {
+  const mapping: Record<string, string> = {
+    "5min": "5m",
+    "1hour": "1h",
+    "1day": "1d",
+    "1week": "1w",
+    "1month": "1m",
+  };
+
+  return mapping[expiration ?? "1day"] ?? "1d";
 }

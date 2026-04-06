@@ -27,5 +27,6 @@ export function textResult(text: string): ToolResult {
 }
 
 export function jsonResult(data: unknown): ToolResult {
-  return textResult(JSON.stringify(data, null, 2));
+  const serialized = JSON.stringify(data, null, 2);
+  return textResult(serialized ?? "null");
 }
