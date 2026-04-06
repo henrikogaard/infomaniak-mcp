@@ -22,7 +22,22 @@ All data stays on Swiss infrastructure. Your credentials never leave your machin
 
 ## Quick Start
 
-### 1. Install & build
+### 1. Install
+
+If you just want to use the MCP server, install or run the published package:
+
+```bash
+npx -y @henrikogard/infomaniak-mcp
+```
+
+Or install it globally:
+
+```bash
+npm install -g @henrikogard/infomaniak-mcp
+mcp-server-infomaniak
+```
+
+### 2. Build from source
 
 ```bash
 git clone https://github.com/henrikogaard/infomaniak-mcp.git
@@ -33,7 +48,7 @@ npm run build
 
 If you run the server directly from this repo, it will also auto-load a project-level `.env` file.
 
-### 2. Get your credentials
+### 3. Get your credentials
 
 **Infomaniak API token** (for kDrive, Calendar, AI, Chk, kMeet, and experimental Swiss Transfer):
 1. Go to [Infomaniak Token Manager](https://manager.infomaniak.com/v3/ng/accounts/token)
@@ -52,7 +67,7 @@ If you run the server directly from this repo, it will also auto-load a project-
 - To find your username: log in at [config.infomaniak.com](https://config.infomaniak.com/) → select "My Contacts" or "My Calendar" → "Manual synchronization" → look for "User name"
 - To generate an app password (required with 2FA): go to [manager.infomaniak.com/v3/profile/application-password](https://manager.infomaniak.com/v3/profile/application-password)
 
-### 3. Configure your AI client
+### 4. Configure your AI client
 
 **Claude Code** — add to `~/.claude/settings.json`:
 
@@ -159,7 +174,7 @@ For local development, OpenAI recommends tunneling your local HTTP MCP endpoint 
 
 > **Note**: MCP servers run locally on your computer as a subprocess. They don't work on mobile (Claude iOS/Android app). You need a desktop client.
 
-### 4. Verify the server
+### 5. Verify the server
 
 The default server surface is intended to be the stable, publishable one. Experimental SwissTransfer tools stay hidden unless you explicitly opt in.
 
