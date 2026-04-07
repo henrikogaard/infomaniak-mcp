@@ -1,6 +1,6 @@
 {
   "name": "@henrikogard/infomaniak-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Unified MCP server for Infomaniak kSuite — kDrive, Calendar, Mail (IMAP/SMTP), and Contacts (CardDAV)",
   "type": "module",
   "main": "dist/index.js",

@@ -39,9 +39,25 @@ export function registerMailTools(server: McpServer, mail: MailService) {
       const msg = await mail.readMessage(folder, uid);
       const body = msg.text || (msg.html ? "[HTML content available — body omitted for brevity]" : "(empty)");
       const attachmentInfo = msg.attachments.length > 0
-        ? `\n\nAttachments:\n${msg.attachments.map((a) => `- ${a.filename} (${a.contentType}, ${a.size} bytes)`).join("\n")}`
+        ? `\n\nAttachments:\n${msg.attachments.map((a, index) => `- [${index}] ${a.filename} (${a.contentType}, ${a.size} bytes)`).join("\n")}`
         : "";
       return textResult(`Subject: ${msg.subject}\nFrom: ${msg.from}\nTo: ${msg.to.join(", ")}\nCc: ${msg.cc.join(", ")}\nDate: ${msg.date}\nMessage-ID: ${msg.messageId}\n\n${body}${attachmentInfo}`);
+    })
+  );
+
+  server.tool(
+    "mail_download_attachment",
+    "Download a specific attachment from an email message by its zero-based attachment index. Use mail_read_message first to inspect the available attachments.",
+    {
+      folder: z.string().describe("Folder path (e.g. INBOX)"),
+      uid: z.number().describe("Message UID"),
+      attachment_index: z.number().int().min(0).describe("Zero-based attachment index from mail_read_message"),
+    },
+    safeHandler(async ({ folder, uid, attachment_index }) => {
+      const attachment = await mail.downloadAttachment(folder, uid, attachment_index);
+      return textResult(
+        `Attachment: ${attachment.filename}\nContent-Type: ${attachment.contentType}\nSize: ${attachment.size} bytes\nBase64 content:\n${attachment.contentBase64}`
+      );
     })
   );
 
@@ -61,7 +77,7 @@ export function registerMailTools(server: McpServer, mail: MailService) {
 
   server.tool(
     "mail_send",
-    "Send an email message. Supports plain text and/or HTML body, CC/BCC, and reply threading.",
+    "Send an email message. Supports plain text and/or HTML body, file attachments, CC/BCC, and reply threading.",
     {
       to: z.array(z.string()).describe("Recipient email addresses"),
       subject: z.string().describe("Email subject"),
@@ -69,12 +85,26 @@ export function registerMailTools(server: McpServer, mail: MailService) {
       html: z.string().optional().describe("HTML body"),
       cc: z.array(z.string()).optional().describe("CC recipients"),
       bcc: z.array(z.string()).optional().describe("BCC recipients"),
+      attachments: z.array(z.object({
+        filename: z.string().describe("Attachment filename"),
+        base64_content: z.string().describe("Base64-encoded attachment content"),
+        content_type: z.string().optional().describe("Optional MIME type, e.g. text/plain or application/pdf"),
+        content_disposition: z.enum(["attachment", "inline"]).optional().describe("How the attachment should be presented"),
+        content_id: z.string().optional().describe("Optional CID for inline HTML attachments"),
+      })).optional().describe("Optional attachments to include"),
       reply_to_message_id: z.string().optional().describe("Message-ID to reply to (for threading)"),
       references: z.array(z.string()).optional().describe("Message-ID references chain (for threading)"),
     },
-    safeHandler(async ({ to, subject, text, html, cc, bcc, reply_to_message_id, references }) => {
+    safeHandler(async ({ to, subject, text, html, cc, bcc, attachments, reply_to_message_id, references }) => {
       const result = await mail.sendMessage({
         to, subject, text, html, cc, bcc,
+        attachments: attachments?.map((attachment) => ({
+          filename: attachment.filename,
+          base64Content: attachment.base64_content,
+          contentType: attachment.content_type,
+          contentDisposition: attachment.content_disposition,
+          cid: attachment.content_id,
+        })),
         inReplyTo: reply_to_message_id,
         references,
       });

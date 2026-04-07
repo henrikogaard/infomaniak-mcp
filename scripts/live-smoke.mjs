@@ -60,6 +60,7 @@ const expectedTools = [
   "mail_list_folders",
   "mail_list_messages",
   "mail_read_message",
+  "mail_download_attachment",
   "mail_search",
   "mail_send",
   "mail_move",
@@ -391,6 +392,13 @@ async function main() {
           to: [serverEnv.MAIL_USER],
           subject: temp.mailSubject,
           text: `Smoke test message ${temp.mailSubject}`,
+          attachments: [
+            {
+              filename: "smoke-attachment.txt",
+              content_type: "text/plain",
+              base64_content: Buffer.from(`Attachment for ${temp.mailSubject}`, "utf8").toString("base64"),
+            },
+          ],
         }));
         return text;
       }, { cleanup: "move to Trash then delete" });
@@ -414,9 +422,21 @@ async function main() {
       }, { cleanup: "move to Trash then delete", timeoutMs: 45000, optional: true });
 
       if (delivered && temp.mailUid) {
+        await runCheck("mail_download_attachment", async () => {
+          const text = parseTextContent(await callTool(client, "mail_download_attachment", {
+            folder: temp.mailFolder,
+            uid: temp.mailUid,
+            attachment_index: 0,
+          }));
+          if (!text.includes("smoke-attachment.txt")) {
+            throw new Error(`Unexpected attachment payload: ${text}`);
+          }
+          return text.slice(0, 220);
+        }, { cleanup: "n/a" });
+
         await runCheck("mail_flag(add)", async () => {
           const text = parseTextContent(await callTool(client, "mail_flag", {
-            folder: "INBOX",
+            folder: temp.mailFolder,
             uid: temp.mailUid,
             flags: ["\\Flagged"],
             action: "add",
@@ -426,7 +446,7 @@ async function main() {
 
         await runCheck("mail_flag(remove)", async () => {
           const text = parseTextContent(await callTool(client, "mail_flag", {
-            folder: "INBOX",
+            folder: temp.mailFolder,
             uid: temp.mailUid,
             flags: ["\\Flagged"],
             action: "remove",

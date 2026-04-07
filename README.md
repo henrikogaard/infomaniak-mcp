@@ -10,11 +10,11 @@ All data stays on Swiss infrastructure. Your credentials never leave your machin
 |---------|----------|-------|-------------|
 | **kDrive** | REST API | 9 | Cloud storage — search, browse, download, upload, create, move, rename, delete files |
 | **Calendar** | REST API | 5 | Calendar management — list, create, update, delete events |
-| **Mail** | IMAP/SMTP | 8 | Email — read, search, send, move, delete, flag messages |
+| **Mail** | IMAP/SMTP | 9 | Email — read, search, send, download attachments, move, delete, flag messages |
 | **Contacts** | CardDAV | 7 | Address book — list, search, get, create, update, delete contacts |
 | **AI Tools (Euria)** | REST API | 4 | Sovereign Swiss AI — chat, embeddings, audio transcription |
 | **Swiss Transfer** | REST API | 2 experimental | Encrypted file sharing up to 50 GB (disabled by default) |
-| **kMeet** | REST API | 3 | Video conferencing room management |
+| **kMeet** | REST API | 2 | Video conferencing room management |
 | **Chk** | REST API | 3 | URL shortener with QR codes |
 | **kPaste** | PrivateBin | 1 | Zero-knowledge encrypted secret sharing |
 
@@ -230,8 +230,9 @@ Requires: `MAIL_USER` + `MAIL_PASSWORD`
 | `mail_list_folders` | List all mail folders (INBOX, Sent, Drafts, etc.) |
 | `mail_list_messages` | List messages in a folder (newest first, paginated) |
 | `mail_read_message` | Read full email with headers, body, and attachment list |
+| `mail_download_attachment` | Download a specific attachment from a message as base64 |
 | `mail_search` | Search by subject, body, or sender |
-| `mail_send` | Send email (plain text/HTML, CC/BCC, reply threading) |
+| `mail_send` | Send email with plain text/HTML, attachments, CC/BCC, and reply threading |
 | `mail_move` | Move a message to a different folder |
 | `mail_delete` | Delete a message |
 | `mail_flag` | Add/remove flags (\\Seen, \\Flagged, \\Answered) |
@@ -315,9 +316,8 @@ Requires: `INFOMANIAK_TOKEN`
 
 | Tool | Description |
 |------|-------------|
-| `kmeet_create_room` | Create a video conference room (returns join URL) |
-| `kmeet_list_rooms` | List all conference rooms |
-| `kmeet_delete_room` | Delete a conference room |
+| `kmeet_create_room` | Create an instant video conference room (returns join URL) |
+| `kmeet_schedule_room` | Create a scheduled kMeet room tied to a calendar event, with optional attendees and room settings |
 
 ### Chk (URL Shortener)
 

@@ -1,8 +1,19 @@
 # Changelog
 
+## [0.1.1] - 2026-04-07
+
+### Added
+- Mail: `mail_send` now supports file attachments via base64 payloads
+- Mail: new `mail_download_attachment` tool for retrieving a specific attachment as base64
+- kMeet: `kmeet_schedule_room` now exposes advanced room options such as lobby, password, recording, and audio-only mode
+
+### Changed
+- Mail: `mail_read_message` now numbers attachments so they can be downloaded reliably by index
+- README: corrected the documented kMeet tool surface to match the actual implementation
+
 ## [0.1.0] - 2026-04-06
 
-### Initial release — 42 tools across 9 Infomaniak services
+### Initial release — 41 tools across 9 Infomaniak services
 
 #### Services added
 - **kDrive** (9 tools) — search, list, get, download, upload, create folder, delete, move, rename
@@ -11,7 +22,7 @@
 - **Contacts** (7 tools) — list address books, list/search/get/create/update/delete contacts
 - **AI Tools / Euria** (4 tools) — list models, chat completion, embeddings, audio transcription (Whisper)
 - **Swiss Transfer** (2 tools) — send files (multi-step upload), get transfer info
-- **kMeet** (3 tools) — create/list/delete video conference rooms
+- **kMeet** (2 tools) — create instant rooms and schedule meetings
 - **Chk** (3 tools) — create/list/delete short URLs
 - **kPaste** (1 tool) — create encrypted ephemeral pastes (PrivateBin v2 protocol)
 

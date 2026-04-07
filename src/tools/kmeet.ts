@@ -41,6 +41,20 @@ export function registerKMeetTools(server: McpServer, kmeet: KMeetService) {
         )
         .optional()
         .describe("List of attendees to invite"),
+      room_options: z
+        .object({
+          subject: z.string().optional().describe("Displayed meeting subject inside the room"),
+          start_audio_muted: z.boolean().optional().describe("Mute participants when they join"),
+          enable_recording: z.boolean().optional().describe("Allow cloud recording if the backend supports it"),
+          enable_moderator_video: z.boolean().optional().describe("Keep moderator video enabled"),
+          start_audio_only: z.boolean().optional().describe("Start the room in audio-only mode"),
+          lobby_enabled: z.boolean().optional().describe("Enable waiting room / lobby"),
+          password_enabled: z.boolean().optional().describe("Require a password for the room"),
+          password: z.string().optional().describe("Room password when password protection is enabled"),
+          e2ee_enabled: z.boolean().optional().describe("Request end-to-end encryption support"),
+        })
+        .optional()
+        .describe("Advanced kMeet room options"),
     },
     safeHandler(
       async ({
@@ -51,6 +65,7 @@ export function registerKMeetTools(server: McpServer, kmeet: KMeetService) {
         timezone,
         description,
         attendees,
+        room_options,
       }) => {
         const room = await kmeet.createScheduledRoom({
           calendarId: calendar_id,
@@ -60,6 +75,7 @@ export function registerKMeetTools(server: McpServer, kmeet: KMeetService) {
           timezone,
           description,
           attendees,
+          options: room_options,
         });
         return jsonResult(room);
       }

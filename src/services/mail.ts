@@ -3,6 +3,20 @@ import { createTransport, type Transporter } from "nodemailer";
 import { simpleParser, type ParsedMail } from "mailparser";
 import type { Config } from "../config.js";
 
+interface MailAttachment {
+  filename: string;
+  contentType: string;
+  size: number;
+}
+
+interface SendAttachment {
+  filename: string;
+  base64Content: string;
+  contentType?: string;
+  contentDisposition?: "attachment" | "inline";
+  cid?: string;
+}
+
 export class MailService {
   private config: Config;
 
@@ -126,47 +140,56 @@ export class MailService {
     messageId: string;
     text: string;
     html: string;
-    attachments: Array<{ filename: string; contentType: string; size: number }>;
+    attachments: MailAttachment[];
   }> {
-    const client = this.createImapClient();
-    try {
-      await client.connect();
-      await client.mailboxOpen(folder);
+    const parsed = await this.getParsedMessage(folder, uid);
+    return {
+      subject: parsed.subject ?? "(no subject)",
+      from: parsed.from?.text ?? "",
+      to: Array.isArray(parsed.to)
+        ? parsed.to.map((a) => a.text)
+        : parsed.to
+          ? [parsed.to.text]
+          : [],
+      cc: Array.isArray(parsed.cc)
+        ? parsed.cc.map((a) => a.text)
+        : parsed.cc
+          ? [parsed.cc.text]
+          : [],
+      date: parsed.date?.toISOString() ?? "",
+      messageId: parsed.messageId ?? "",
+      text: parsed.text ?? "",
+      html: parsed.html || "",
+      attachments: summarizeAttachments(parsed),
+    };
+  }
 
-      const raw = await client.download(String(uid), undefined, { uid: true });
-      const chunks: Buffer[] = [];
-      for await (const chunk of raw.content) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      const buffer = Buffer.concat(chunks);
-      const parsed: ParsedMail = await simpleParser(buffer);
+  async downloadAttachment(
+    folder: string,
+    uid: number,
+    attachmentIndex: number
+  ): Promise<MailAttachment & { contentBase64: string }> {
+    const parsed = await this.getParsedMessage(folder, uid);
+    const attachments = parsed.attachments ?? [];
+    const target = attachments[attachmentIndex];
 
-      return {
-        subject: parsed.subject ?? "(no subject)",
-        from: parsed.from?.text ?? "",
-        to: Array.isArray(parsed.to)
-          ? parsed.to.map((a) => a.text)
-          : parsed.to
-            ? [parsed.to.text]
-            : [],
-        cc: Array.isArray(parsed.cc)
-          ? parsed.cc.map((a) => a.text)
-          : parsed.cc
-            ? [parsed.cc.text]
-            : [],
-        date: parsed.date?.toISOString() ?? "",
-        messageId: parsed.messageId ?? "",
-        text: parsed.text ?? "",
-        html: parsed.html || "",
-        attachments: (parsed.attachments ?? []).map((a) => ({
-          filename: a.filename ?? "unnamed",
-          contentType: a.contentType,
-          size: a.size,
-        })),
-      };
-    } finally {
-      await client.logout().catch(() => {});
+    if (!target) {
+      throw new Error(
+        `Attachment index ${attachmentIndex} not found. Message has ${attachments.length} attachment(s).`
+      );
     }
+
+    const content = target.content;
+    if (!content) {
+      throw new Error(`Attachment ${attachmentIndex} has no downloadable content.`);
+    }
+
+    return {
+      filename: target.filename ?? "unnamed",
+      contentType: target.contentType,
+      size: target.size,
+      contentBase64: content.toString("base64"),
+    };
   }
 
   async searchMessages(
@@ -230,6 +253,7 @@ export class MailService {
     html?: string;
     inReplyTo?: string;
     references?: string[];
+    attachments?: SendAttachment[];
   }): Promise<{ messageId: string }> {
     const transport = this.createSmtpTransport();
     const info = await transport.sendMail({
@@ -242,8 +266,33 @@ export class MailService {
       html: params.html,
       inReplyTo: params.inReplyTo,
       references: params.references?.join(" "),
+      attachments: params.attachments?.map((attachment) => ({
+        filename: attachment.filename,
+        content: Buffer.from(attachment.base64Content, "base64"),
+        contentType: attachment.contentType,
+        contentDisposition: attachment.contentDisposition,
+        cid: attachment.cid,
+      })),
     });
     return { messageId: info.messageId };
+  }
+
+  private async getParsedMessage(folder: string, uid: number): Promise<ParsedMail> {
+    const client = this.createImapClient();
+    try {
+      await client.connect();
+      await client.mailboxOpen(folder);
+
+      const raw = await client.download(String(uid), undefined, { uid: true });
+      const chunks: Buffer[] = [];
+      for await (const chunk of raw.content) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      const buffer = Buffer.concat(chunks);
+      return await simpleParser(buffer);
+    } finally {
+      await client.logout().catch(() => {});
+    }
   }
 
   async moveMessage(
@@ -291,4 +340,12 @@ export class MailService {
       await client.logout().catch(() => {});
     }
   }
+}
+
+function summarizeAttachments(parsed: ParsedMail): MailAttachment[] {
+  return (parsed.attachments ?? []).map((attachment) => ({
+    filename: attachment.filename ?? "unnamed",
+    contentType: attachment.contentType,
+    size: attachment.size,
+  }));
 }

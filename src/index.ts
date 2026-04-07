@@ -26,7 +26,7 @@ const config = loadConfig();
 
 const server = new McpServer({
   name: "infomaniak-ksuite",
-  version: "0.1.0",
+  version: "0.1.1",
 });
 
 function hasAnyCredential(...values: string[]): boolean {
