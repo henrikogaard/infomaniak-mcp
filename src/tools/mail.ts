@@ -1,15 +1,31 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { MailService } from "../services/mail.js";
+import type { MailToolService } from "../services/mail.js";
 import { safeHandler, textResult, jsonResult } from "../tool-handler.js";
 
-export function registerMailTools(server: McpServer, mail: MailService) {
+const uidSchema = z.union([z.number(), z.string()]);
+
+export function registerMailTools(server: McpServer, mail: MailToolService) {
+  if (mail.supportsMailboxes && mail.listMailboxes) {
+    server.tool(
+      "mail_list_mailboxes",
+      "List Infomaniak mailboxes available to the configured mail API token.",
+      {},
+      safeHandler(async () => {
+        const mailboxes = await mail.listMailboxes!();
+        return jsonResult(mailboxes);
+      })
+    );
+  }
+
   server.tool(
     "mail_list_folders",
     "List all mail folders/mailboxes (INBOX, Sent, Drafts, Trash, etc.)",
-    {},
-    safeHandler(async () => {
-      const folders = await mail.listFolders();
+    {
+      mailbox_uuid: z.string().optional().describe("Optional Infomaniak mailbox UUID when using the Mail API backend"),
+    },
+    safeHandler(async ({ mailbox_uuid }) => {
+      const folders = await mail.listFolders(mailbox_uuid);
       return jsonResult(folders);
     })
   );
@@ -21,9 +37,10 @@ export function registerMailTools(server: McpServer, mail: MailService) {
       folder: z.string().optional().describe("Folder path (default: INBOX)"),
       limit: z.number().optional().describe("Messages per page (default: 20)"),
       page: z.number().optional().describe("Page number (default: 1)"),
+      mailbox_uuid: z.string().optional().describe("Optional Infomaniak mailbox UUID when using the Mail API backend"),
     },
-    safeHandler(async ({ folder, limit, page }) => {
-      const result = await mail.listMessages(folder ?? "INBOX", limit ?? 20, page ?? 1);
+    safeHandler(async ({ folder, limit, page, mailbox_uuid }) => {
+      const result = await mail.listMessages(folder ?? "INBOX", limit ?? 20, page ?? 1, mailbox_uuid);
       return jsonResult(result);
     })
   );
@@ -33,10 +50,11 @@ export function registerMailTools(server: McpServer, mail: MailService) {
     "Read the full content of an email message by UID. Returns subject, from, to, cc, date, body text, and attachment list.",
     {
       folder: z.string().describe("Folder path (e.g. INBOX)"),
-      uid: z.number().describe("Message UID"),
+      uid: uidSchema.describe("Message UID"),
+      mailbox_uuid: z.string().optional().describe("Optional Infomaniak mailbox UUID when using the Mail API backend"),
     },
-    safeHandler(async ({ folder, uid }) => {
-      const msg = await mail.readMessage(folder, uid);
+    safeHandler(async ({ folder, uid, mailbox_uuid }) => {
+      const msg = await mail.readMessage(folder, uid, mailbox_uuid);
       const body = msg.text || (msg.html ? "[HTML content available — body omitted for brevity]" : "(empty)");
       const attachmentInfo = msg.attachments.length > 0
         ? `\n\nAttachments:\n${msg.attachments.map((a, index) => `- [${index}] ${a.filename} (${a.contentType}, ${a.size} bytes)`).join("\n")}`
@@ -50,7 +68,7 @@ export function registerMailTools(server: McpServer, mail: MailService) {
     "Download a specific attachment from an email message by its zero-based attachment index. Use mail_read_message first to inspect the available attachments.",
     {
       folder: z.string().describe("Folder path (e.g. INBOX)"),
-      uid: z.number().describe("Message UID"),
+      uid: uidSchema.describe("Message UID"),
       attachment_index: z.number().int().min(0).describe("Zero-based attachment index from mail_read_message"),
     },
     safeHandler(async ({ folder, uid, attachment_index }) => {
@@ -117,7 +135,7 @@ export function registerMailTools(server: McpServer, mail: MailService) {
     "Move a message to a different folder",
     {
       folder: z.string().describe("Current folder"),
-      uid: z.number().describe("Message UID"),
+      uid: uidSchema.describe("Message UID"),
       destination: z.string().describe("Destination folder path"),
     },
     safeHandler(async ({ folder, uid, destination }) => {
@@ -131,7 +149,7 @@ export function registerMailTools(server: McpServer, mail: MailService) {
     "Delete a message (moves to Trash on most servers)",
     {
       folder: z.string().describe("Folder containing the message"),
-      uid: z.number().describe("Message UID"),
+      uid: uidSchema.describe("Message UID"),
     },
     safeHandler(async ({ folder, uid }) => {
       await mail.deleteMessage(folder, uid);
@@ -144,7 +162,7 @@ export function registerMailTools(server: McpServer, mail: MailService) {
     "Add or remove flags on a message. Common flags: \\Seen (read), \\Flagged (starred), \\Answered (replied), \\Draft",
     {
       folder: z.string().describe("Folder containing the message"),
-      uid: z.number().describe("Message UID"),
+      uid: uidSchema.describe("Message UID"),
       flags: z.array(z.string()).describe("Flags to add/remove (e.g. [\"\\\\Seen\", \"\\\\Flagged\"])"),
       action: z.enum(["add", "remove"]).describe("Whether to add or remove the flags"),
     },

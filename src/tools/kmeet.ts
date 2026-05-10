@@ -81,4 +81,15 @@ export function registerKMeetTools(server: McpServer, kmeet: KMeetService) {
       }
     )
   );
+
+  server.tool(
+    "kmeet_get_room_settings",
+    "Get settings for an existing scheduled kMeet room, such as lobby/password/recording flags returned by the API.",
+    {
+      room_id: z.string().describe("kMeet room ID"),
+    },
+    safeHandler(async ({ room_id }) => {
+      return jsonResult(await kmeet.getRoomSettings(room_id));
+    })
+  );
 }

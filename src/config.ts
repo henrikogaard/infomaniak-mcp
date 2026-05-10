@@ -4,8 +4,10 @@ import { fileURLToPath } from "node:url";
 import { config as loadDotenv } from "dotenv";
 
 export interface Config {
-  // Infomaniak REST API token (for kDrive, Calendar, AI, Chk, kMeet, mail admin)
+  // Infomaniak REST API token (for kDrive, Calendar, AI, Chk, kMeet)
   infomaniakToken: string;
+  // Infomaniak Mail API token. Defaults to INFOMANIAK_TOKEN if MAIL_TOKEN is not set.
+  mailToken: string;
   // kDrive ID
   kdriveId: string;
   // AI Tools product ID
@@ -28,6 +30,9 @@ export interface Config {
   calDavUrl: string;
   // Experimental SwissTransfer tools
   enableExperimentalSwissTransfer: boolean;
+  // kChat credentials
+  kchatToken: string;
+  kchatTeamName: string;
 }
 
 function parseBooleanEnv(value: string | undefined): boolean {
@@ -56,6 +61,7 @@ export function loadConfig(): Config {
 
   return {
     infomaniakToken: process.env.INFOMANIAK_TOKEN ?? "",
+    mailToken: process.env.MAIL_TOKEN ?? process.env.INFOMANIAK_TOKEN ?? "",
     kdriveId: process.env.KDRIVE_ID ?? "",
     aiProductId: process.env.AI_PRODUCT_ID ?? "",
     mailUser,
@@ -70,5 +76,7 @@ export function loadConfig(): Config {
     cardDavUrl: process.env.CARDDAV_URL ?? "https://sync.infomaniak.com",
     calDavUrl: process.env.CALDAV_URL ?? "https://sync.infomaniak.com",
     enableExperimentalSwissTransfer: parseBooleanEnv(process.env.ENABLE_EXPERIMENTAL_SWISSTRANSFER),
+    kchatToken: process.env.KCHAT_TOKEN ?? "",
+    kchatTeamName: process.env.KCHAT_TEAM_NAME ?? "",
   };
 }

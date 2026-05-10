@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+## [0.2.0] - 2026-05-10
+
+### Added
+- Tasks: new CalDAV/VTODO tools for listing task-capable calendars, listing, searching, viewing, creating, updating, completing/reopening, and deleting tasks
+- Mail: added an Infomaniak Mail API backend using bearer-token auth, with `mail_list_mailboxes` and API-backed folder/message list, read, and plain send
+- Mail: added a hybrid router that prefers the Mail API and falls back to IMAP/SMTP for search, attachments, move, delete, flag, and attachment sending
+- kDrive: added share-link management, version restore, trash restore, comments, recents, and file activity tools
+- kChat: added tools for channels, posts, threads, reactions, users, and direct messages via `KCHAT_TOKEN` + `KCHAT_TEAM_NAME`
+- kMeet: added `kmeet_get_room_settings`
+- Tests: added a lightweight Node test harness for CalDAV task parsing, Mail API/hybrid routing, kDrive API routing, kChat API routing, and kMeet room settings
+
 ## [0.1.1] - 2026-04-07
 
 ### Added
@@ -50,19 +63,21 @@
 ## Backlog / Known Issues
 
 ### Needs real-world testing
+- [ ] kDrive share-link, version, trash, comment, recents, and activity endpoints
+- [ ] kChat channel/post/thread/reaction/user/DM endpoints with `KCHAT_TOKEN` and `KCHAT_TEAM_NAME`
+- [ ] kMeet room settings endpoint (`/1/kmeet/rooms/{room_id}/settings`)
 - [ ] Swiss Transfer upload flow (API is undocumented, based on observed behavior)
-- [ ] kMeet room creation endpoint (`/1/meet/room` — inferred, not confirmed)
+- [ ] kMeet room creation endpoint (`/1/kmeet/rooms`)
 - [ ] Chk URL shortener endpoint (`/1/url-shortener` — documented but untested)
 - [ ] Calendar update/delete (endpoints inferred from Infomaniak's own MCP server patterns)
 - [ ] kPaste PrivateBin v2 protocol (encryption format matches spec but untested against server)
 
 ### Missing features
-- [ ] kDrive: file sharing (generate share links with permissions)
-- [ ] kDrive: file versions / history
-- [ ] Mail: attachment download (only lists attachments, doesn't download content)
+- [ ] Mail API: attachment download and attachment sending without IMAP/SMTP fallback
 - [ ] Mail: save draft
 - [ ] Mail: create/delete/rename folders
-- [ ] Mail: connection pooling (currently opens new IMAP connection per operation)
+- [ ] Mail: API-backed search, move/delete, and flag operations
+- [ ] Mail: connection pooling for IMAP/SMTP fallback operations
 - [ ] Contacts: multiple emails/phones per contact (create currently supports one each)
 - [ ] Calendar: recurring events
 - [ ] Calendar: RSVP / invitation handling
@@ -70,13 +85,11 @@
 - [ ] Swiss Transfer: download a received transfer
 - [ ] Swiss Transfer: list past transfers
 - [ ] kPaste: read/decrypt a paste by URL
-- [ ] kMeet: room settings (password, waiting room, recording)
-- [ ] kMeet: scheduled meetings (integrate with calendar)
 - [ ] Newsletter: campaign management (API exists at newsletter.infomaniak.com)
-- [ ] kChat: messaging integration (official MCP server exists separately)
+- [ ] kChat: file upload/download and webhook/command management
 
 ### API verification needed
-- [ ] Confirm kMeet `/1/meet/room` endpoint exists and accepts Bearer token
+- [ ] Confirm kMeet `/1/kmeet/rooms` endpoint accepts Bearer token end-to-end
 - [ ] Confirm Chk `/1/url-shortener` response shape
 - [ ] Confirm Calendar PUT for update returns updated event
 - [ ] Confirm Calendar DELETE endpoint

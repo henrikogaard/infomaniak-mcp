@@ -3,18 +3,104 @@ import { createTransport, type Transporter } from "nodemailer";
 import { simpleParser, type ParsedMail } from "mailparser";
 import type { Config } from "../config.js";
 
-interface MailAttachment {
+export type MailUid = number | string;
+
+export interface MailAttachment {
   filename: string;
   contentType: string;
   size: number;
 }
 
-interface SendAttachment {
+export interface SendAttachment {
   filename: string;
   base64Content: string;
   contentType?: string;
   contentDisposition?: "attachment" | "inline";
   cid?: string;
+}
+
+export interface MailboxSummary {
+  uuid: string;
+  email: string;
+  mailbox: string;
+  isPrimary?: boolean;
+  hostingId?: number;
+}
+
+export interface MailFolder {
+  id?: string;
+  name: string;
+  path: string;
+  specialUse?: string;
+  role?: string;
+  unreadCount?: number;
+  totalCount?: number;
+}
+
+export interface MailMessageSummary {
+  uid: MailUid;
+  subject: string;
+  from: string;
+  date: string;
+  flags: string[];
+  size?: number;
+  preview?: string;
+  threadUid?: MailUid;
+  messagesCount?: number;
+  unseenMessages?: number;
+}
+
+export interface MailListMessagesResult {
+  messages: MailMessageSummary[];
+  total: number;
+}
+
+export interface MailReadMessageResult {
+  subject: string;
+  from: string;
+  to: string[];
+  cc: string[];
+  date: string;
+  messageId: string;
+  text: string;
+  html: string;
+  attachments: MailAttachment[];
+  bcc?: string[];
+  preview?: string;
+  seen?: boolean;
+  flagged?: boolean;
+  folder?: unknown;
+  headers?: unknown;
+}
+
+export interface SendMessageParams {
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject: string;
+  text?: string;
+  html?: string;
+  inReplyTo?: string;
+  references?: string[];
+  attachments?: SendAttachment[];
+}
+
+export interface MailSendResult {
+  messageId: string;
+}
+
+export interface MailToolService {
+  supportsMailboxes?: boolean;
+  listMailboxes?: () => Promise<MailboxSummary[]>;
+  listFolders(mailboxUuid?: string): Promise<MailFolder[]>;
+  listMessages(folder?: string, limit?: number, page?: number, mailboxUuid?: string): Promise<MailListMessagesResult>;
+  readMessage(folder: string, uid: MailUid, mailboxUuid?: string): Promise<MailReadMessageResult>;
+  downloadAttachment(folder: string, uid: MailUid, attachmentIndex: number): Promise<MailAttachment & { contentBase64: string }>;
+  searchMessages(folder: string, query: string, limit?: number): Promise<Array<{ uid: MailUid; subject: string; from: string; date: string }>>;
+  sendMessage(params: SendMessageParams): Promise<MailSendResult>;
+  moveMessage(folder: string, uid: MailUid, destinationFolder: string): Promise<void>;
+  deleteMessage(folder: string, uid: MailUid): Promise<void>;
+  flagMessage(folder: string, uid: MailUid, flags: string[], action: "add" | "remove"): Promise<void>;
 }
 
 export class MailService {
@@ -57,7 +143,7 @@ export class MailService {
     });
   }
 
-  async listFolders(): Promise<Array<{ name: string; path: string; specialUse?: string }>> {
+  async listFolders(): Promise<MailFolder[]> {
     const client = this.createImapClient();
     try {
       await client.connect();
@@ -76,10 +162,7 @@ export class MailService {
     folder: string = "INBOX",
     limit: number = 20,
     page: number = 1
-  ): Promise<{
-    messages: Array<{ uid: number; subject: string; from: string; date: string; flags: string[]; size?: number }>;
-    total: number;
-  }> {
+  ): Promise<MailListMessagesResult> {
     const client = this.createImapClient();
     try {
       await client.connect();
@@ -93,14 +176,7 @@ export class MailService {
       const start = Math.max(1, end - limit + 1);
       const range = `${start}:${end}`;
 
-      const messages: Array<{
-        uid: number;
-        subject: string;
-        from: string;
-        date: string;
-        flags: string[];
-        size?: number;
-      }> = [];
+      const messages: MailMessageSummary[] = [];
 
       for await (const msg of client.fetch(range, {
         uid: true,
@@ -131,17 +207,7 @@ export class MailService {
   async readMessage(
     folder: string,
     uid: number
-  ): Promise<{
-    subject: string;
-    from: string;
-    to: string[];
-    cc: string[];
-    date: string;
-    messageId: string;
-    text: string;
-    html: string;
-    attachments: MailAttachment[];
-  }> {
+  ): Promise<MailReadMessageResult> {
     const parsed = await this.getParsedMessage(folder, uid);
     return {
       subject: parsed.subject ?? "(no subject)",
@@ -244,17 +310,7 @@ export class MailService {
     }
   }
 
-  async sendMessage(params: {
-    to: string[];
-    cc?: string[];
-    bcc?: string[];
-    subject: string;
-    text?: string;
-    html?: string;
-    inReplyTo?: string;
-    references?: string[];
-    attachments?: SendAttachment[];
-  }): Promise<{ messageId: string }> {
+  async sendMessage(params: SendMessageParams): Promise<MailSendResult> {
     const transport = this.createSmtpTransport();
     const info = await transport.sendMail({
       from: this.config.mailUser,

@@ -99,4 +99,11 @@ export class KMeetService {
       url: `https://kmeet.infomaniak.com/${data.code ?? data.id}`,
     } as ScheduledRoom;
   }
+
+  async getRoomSettings(roomId: string): Promise<Record<string, unknown>> {
+    const res = (await this.api.get(
+      `/1/kmeet/rooms/${encodeURIComponent(roomId)}/settings`
+    )) as { data?: unknown };
+    return res.data as Record<string, unknown>;
+  }
 }
