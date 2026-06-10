@@ -27,7 +27,7 @@ Out of scope for this repo:
 - Domains, DNS, hosting, and account governance.
 - kDrive or kChat administrator governance.
 
-Use [`infomaniak-admin-mcp`](https://github.com/Mogacode-ma/infomaniak-mcp-agent) for those workflows.
+Use [`infomaniak-admin-mcp`](https://github.com/henrikogaard/infomaniak-admin-mcp) for those workflows.
 
 ## Preflight
 

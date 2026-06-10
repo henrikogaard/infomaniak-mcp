@@ -8,7 +8,7 @@ All data stays on Swiss infrastructure. Your credentials never leave your machin
 
 This MCP is for **end-user productivity inside one user's kSuite**: mail, kDrive files, calendars, contacts, tasks, kChat conversations, kMeet rooms, Chk links, kPaste, and optional Euria AI.
 
-For tenant/account administration, use the admin-focused companion repo: [`infomaniak-admin-mcp`](https://github.com/Mogacode-ma/infomaniak-mcp-agent). That project is meant for administrator workflows such as account governance, hosting, domains/DNS, mail administration/security, kDrive and kChat governance, API coverage audits, and stricter two-phase commit operations.
+For tenant/account administration, use the admin-focused companion repo: [`infomaniak-admin-mcp`](https://github.com/henrikogaard/infomaniak-admin-mcp). That project is meant for administrator workflows such as account governance, hosting, domains/DNS, mail administration/security, kDrive and kChat governance, API coverage audits, and stricter two-phase commit operations.
 
 The split is intentional. If a workflow changes settings for other users, domains, hosting, organization-wide mail security, or account-level governance, it belongs in `infomaniak-admin-mcp`, not this user MCP.
 
@@ -996,7 +996,7 @@ Registered only when the backing service is also registered. These are read-only
 
 **Mail cache invalidation**: Mailbox and folder discovery are cached for speed, but message and folder mutations that can change folder contents or discovery, such as move, delete, flag, spam marking, draft saving, folder create/rename/delete, and sender bulk cleanup, invalidate the affected mailbox caches.
 
-**Spam blocking**: Infomaniak supports per-mailbox blocked sender lists for email addresses, domains, and wildcard patterns such as `*@example.com`. This MCP keeps spam blocking user-scoped: it updates the selected mailbox settings and does not use Mail Service global/admin configuration. For organization-wide mail security or mailbox administration, use [`infomaniak-admin-mcp`](https://github.com/Mogacode-ma/infomaniak-mcp-agent).
+**Spam blocking**: Infomaniak supports per-mailbox blocked sender lists for email addresses, domains, and wildcard patterns such as `*@example.com`. This MCP keeps spam blocking user-scoped: it updates the selected mailbox settings and does not use Mail Service global/admin configuration. For organization-wide mail security or mailbox administration, use [`infomaniak-admin-mcp`](https://github.com/henrikogaard/infomaniak-admin-mcp).
 
 **Trace logging**: Set `INFOMANIAK_TRACE=1` to log lines like `[infomaniak-trace] trace_id=trc_... tool mail_query ok duration_ms=123` plus redacted HTTP timings to stderr. Tool calls and HTTP calls share a trace ID when the HTTP call happens inside a traced tool handler. Query strings are stripped from traced URLs so tokens, cursors, and search terms are not logged.
 

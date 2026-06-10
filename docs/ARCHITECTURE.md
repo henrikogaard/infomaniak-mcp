@@ -2,7 +2,7 @@
 
 This document describes the 1.0 runtime architecture for `@henrikogard/infomaniak-mcp`.
 
-The server is a local STDIO MCP server. It is intentionally user-scoped: it helps one Infomaniak user work with their own kSuite data. Tenant administration, organization-wide mail security, domains, hosting, and governance workflows belong in the admin-focused companion project, [`infomaniak-admin-mcp`](https://github.com/Mogacode-ma/infomaniak-mcp-agent).
+The server is a local STDIO MCP server. It is intentionally user-scoped: it helps one Infomaniak user work with their own kSuite data. Tenant administration, organization-wide mail security, domains, hosting, and governance workflows belong in the admin-focused companion project, [`infomaniak-admin-mcp`](https://github.com/henrikogaard/infomaniak-admin-mcp).
 
 ## Runtime Topology
 
