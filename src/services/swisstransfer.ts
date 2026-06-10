@@ -117,7 +117,7 @@ export class SwissTransferService {
 
     const init = (await initRes.json()) as TransferInit;
     const containerUUID = init.container?.UUID;
-    const uploadHost = init.uploadHost;
+    const uploadHost = normalizeUploadHost(init.uploadHost);
 
     if (!containerUUID || !uploadHost) {
       throw new Error(`Swiss Transfer container init returned an unexpected payload: ${JSON.stringify(init)}`);
@@ -138,7 +138,7 @@ export class SwissTransferService {
       for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
         const chunk = chunks[chunkIndex];
         const isLastChunk = chunkIndex === chunks.length - 1 ? 1 : 0;
-        const uploadUrl = `https://${uploadHost}${this.apiBase}/uploadChunk/${containerUUID}/${fileUUID}/${chunkIndex}/${isLastChunk}`;
+        const uploadUrl = `https://${uploadHost}/api/uploadChunk/${encodeURIComponent(containerUUID)}/${encodeURIComponent(fileUUID)}/${chunkIndex}/${isLastChunk}`;
 
         const uploadRes = await fetch(uploadUrl, {
           method: "POST",
@@ -202,6 +202,32 @@ function normalizeFileUUIDs(value: TransferInit["filesUUID"], names: string[]): 
     return names.map((name) => value[name]).filter((entry): entry is string => typeof entry === "string");
   }
   return [];
+}
+
+function normalizeUploadHost(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new Error("Swiss Transfer container init did not include an upload host.");
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("@")) {
+    throw new Error(`Unexpected Swiss Transfer upload host: ${value}`);
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(`https://${trimmed}`);
+  } catch {
+    throw new Error(`Unexpected Swiss Transfer upload host: ${value}`);
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (parsed.pathname !== "/" || parsed.search || parsed.hash || parsed.username || parsed.password || parsed.port) {
+    throw new Error(`Unexpected Swiss Transfer upload host: ${value}`);
+  }
+  if (hostname !== "swisstransfer.com" && !hostname.endsWith(".swisstransfer.com")) {
+    throw new Error(`Unexpected Swiss Transfer upload host: ${value}`);
+  }
+  return hostname;
 }
 
 function splitIntoChunks(buffer: Buffer, chunkSize: number): Buffer[] {

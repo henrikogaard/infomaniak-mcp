@@ -25,15 +25,42 @@ import { registerChkTools } from "./tools/chk.js";
 import { registerKMeetTools } from "./tools/kmeet.js";
 import { registerKChatTools } from "./tools/kchat.js";
 import { registerSwissTransferTools } from "./tools/swisstransfer.js";
+import { registerWorkflowTools } from "./tools/workflows.js";
+import { registerHelpTool } from "./tools/help.js";
 import { KPasteService } from "./services/kpaste.js";
 import { registerKPasteTools } from "./tools/kpaste.js";
+import { registerWorkflowPrompts } from "./prompts/workflows.js";
+import { registerTempResourceTemplate, defaultTempResourceRegistry } from "./temp-resources.js";
+import { createToolFilter, createToolFilteredServer, createToolRegistry, isServiceEnabled, profileToFilterConfig } from "./tool-filter.js";
 
 const config = loadConfig();
+const profileFilter = profileToFilterConfig(config.toolProfile);
+const toolFilter = createToolFilter({
+  services: config.enabledServices || profileFilter?.services || "",
+  tools: config.enabledTools || profileFilter?.tools || "",
+  disabledTools: mergeCommaLists(profileFilter?.disabledTools, config.disabledTools),
+  readOnly: config.readOnly || profileFilter?.readOnly === true,
+});
 
 const server = new McpServer({
   name: "infomaniak-ksuite",
-  version: "0.2.0",
+  version: "1.0.0",
 });
+const toolRegistry = createToolRegistry();
+const toolServer = createToolFilteredServer(server, toolFilter, toolRegistry);
+
+registerWorkflowPrompts(server);
+registerTempResourceTemplate(server, defaultTempResourceRegistry);
+
+if (config.readOnly) {
+  console.error("[infomaniak-mcp] Read-only mode enabled; mutating tools are hidden from tools/list.");
+}
+
+if (config.toolProfile) {
+  console.error(profileFilter
+    ? `[infomaniak-mcp] Tool profile enabled: ${config.toolProfile}`
+    : `[infomaniak-mcp] Warning: Unknown INFOMANIAK_PROFILE "${config.toolProfile}" ignored.`);
+}
 
 function hasAnyCredential(...values: string[]): boolean {
   return values.some((value) => value.trim().length > 0);
@@ -43,64 +70,86 @@ function isConfigured(value: string): boolean {
   return value.trim().length > 0;
 }
 
+function mergeCommaLists(...values: Array<string | undefined>): string {
+  return values
+    .flatMap((value) => (value ?? "").split(","))
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+    .join(",");
+}
+
 // ── kDrive ──
-if (config.infomaniakToken && config.kdriveId) {
-  registerKDriveTools(server, new KDriveService(config));
+let kdriveService: KDriveService | undefined;
+if (isServiceEnabled(toolFilter, "kdrive") && config.infomaniakToken && config.kdriveId) {
+  kdriveService = new KDriveService(config);
+  registerKDriveTools(toolServer, kdriveService, { tempResources: defaultTempResourceRegistry });
   console.error("[infomaniak-mcp] kDrive tools enabled");
 }
 
 // ── Calendar ──
-if (config.infomaniakToken) {
-  registerCalendarTools(server, new CalendarService(config));
+let calendarService: CalendarService | undefined;
+if (isServiceEnabled(toolFilter, "calendar") && config.infomaniakToken) {
+  calendarService = new CalendarService(config);
+  registerCalendarTools(toolServer, calendarService);
   console.error("[infomaniak-mcp] Calendar tools enabled");
 }
 
 // ── AI Tools (Euria) ──
-if (config.infomaniakToken && config.aiProductId) {
-  registerAITools(server, new AIService(config));
+if (isServiceEnabled(toolFilter, "ai") && config.infomaniakToken && config.aiProductId) {
+  registerAITools(toolServer, new AIService(config));
   console.error("[infomaniak-mcp] AI Tools (Euria) enabled");
 }
 
 // ── Chk (URL Shortener) ──
-if (config.infomaniakToken) {
-  registerChkTools(server, new ChkService(config));
+if (isServiceEnabled(toolFilter, "chk") && config.infomaniakToken) {
+  registerChkTools(toolServer, new ChkService(config));
   console.error("[infomaniak-mcp] Chk (URL shortener) enabled");
 }
 
 // ── kMeet ──
-if (config.infomaniakToken) {
-  registerKMeetTools(server, new KMeetService(config));
+if (isServiceEnabled(toolFilter, "kmeet") && config.infomaniakToken) {
+  registerKMeetTools(toolServer, new KMeetService(config));
   console.error("[infomaniak-mcp] kMeet enabled");
 }
 
 // ── kChat ──
-if (config.kchatToken && config.kchatTeamName) {
-  registerKChatTools(server, new KChatService({
-    token: config.kchatToken,
-    teamName: config.kchatTeamName,
-  }));
-  console.error("[infomaniak-mcp] kChat enabled");
+if (isServiceEnabled(toolFilter, "kchat") && config.kchatToken && config.kchatTeamName) {
+  try {
+    registerKChatTools(toolServer, new KChatService({
+      token: config.kchatToken,
+      teamName: config.kchatTeamName,
+    }), { strictExternalSend: config.strictExternalSend });
+    console.error("[infomaniak-mcp] kChat enabled");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[infomaniak-mcp] Warning: kChat disabled: ${message}`);
+  }
 }
 
 // ── Swiss Transfer ──
-if (config.infomaniakToken && config.enableExperimentalSwissTransfer) {
-  registerSwissTransferTools(server, new SwissTransferService(config));
+if (isServiceEnabled(toolFilter, "swisstransfer") && config.infomaniakToken && config.enableExperimentalSwissTransfer) {
+  registerSwissTransferTools(toolServer, new SwissTransferService(config), { strictExternalSend: config.strictExternalSend });
   console.error("[infomaniak-mcp] Swiss Transfer enabled (experimental)");
 }
 
 // ── kPaste ──
-{
-  registerKPasteTools(server, new KPasteService(config));
+if (isServiceEnabled(toolFilter, "kpaste")) {
+  registerKPasteTools(toolServer, new KPasteService(config));
   console.error("[infomaniak-mcp] kPaste enabled");
 }
 
 // ── Mail (Infomaniak API preferred, IMAP/SMTP fallback) ──
+let hybridMailService: HybridMailService | undefined;
 {
   const mailApi = config.mailToken ? new MailApiService({ token: config.mailToken }) : undefined;
   const legacyMail = config.mailUser && config.mailPassword ? new MailService(config) : undefined;
 
-  if (mailApi || legacyMail) {
-    registerMailTools(server, new HybridMailService({ api: mailApi, legacy: legacyMail }));
+  if (isServiceEnabled(toolFilter, "mail") && (mailApi || legacyMail)) {
+    hybridMailService = new HybridMailService({ api: mailApi, legacy: legacyMail });
+    registerMailTools(toolServer, hybridMailService, {
+      strictExternalSend: config.strictExternalSend,
+      tempResources: defaultTempResourceRegistry,
+    });
     if (mailApi && legacyMail) {
       console.error("[infomaniak-mcp] Mail tools enabled (API preferred, IMAP/SMTP fallback)");
     } else if (mailApi) {
@@ -112,16 +161,26 @@ if (config.infomaniakToken && config.enableExperimentalSwissTransfer) {
 }
 
 // ── Contacts (CardDAV) ──
-if (config.davUser && config.davPassword) {
-  registerContactsTools(server, new ContactsService(config));
+let contactsService: ContactsService | undefined;
+if (isServiceEnabled(toolFilter, "contacts") && config.davUser && config.davPassword) {
+  contactsService = new ContactsService(config, { cacheTtlMs: config.davCacheTtlMs });
+  registerContactsTools(toolServer, contactsService);
   console.error("[infomaniak-mcp] Contacts tools enabled (CardDAV)");
 }
 
 // ── Tasks (CalDAV VTODO) ──
-if (config.davUser && config.davPassword) {
-  registerTaskTools(server, new CalDAVTasksService(config));
+if (isServiceEnabled(toolFilter, "tasks") && config.davUser && config.davPassword) {
+  registerTaskTools(toolServer, new CalDAVTasksService(config, { cacheTtlMs: config.davCacheTtlMs }));
   console.error("[infomaniak-mcp] Task tools enabled (CalDAV VTODO)");
 }
+
+registerWorkflowTools(toolServer, {
+  mail: hybridMailService,
+  calendar: calendarService,
+  contacts: contactsService,
+  kdrive: kdriveService,
+});
+registerHelpTool(server, () => toolRegistry.tools);
 
 // ── Warnings ──
 if (!config.infomaniakToken && !config.mailToken && !config.mailUser && !config.davUser && !config.kchatToken) {
@@ -133,13 +192,13 @@ if (!config.infomaniakToken && !config.mailToken && !config.mailUser && !config.
   );
 }
 
-if (isConfigured(config.infomaniakToken) && !isConfigured(config.kdriveId)) {
+if (isServiceEnabled(toolFilter, "kdrive") && isConfigured(config.infomaniakToken) && !isConfigured(config.kdriveId)) {
   console.error(
     "[infomaniak-mcp] Warning: INFOMANIAK_TOKEN is set but KDRIVE_ID is missing, so kDrive tools are disabled."
   );
 }
 
-if (isConfigured(config.infomaniakToken) && !config.enableExperimentalSwissTransfer) {
+if (isServiceEnabled(toolFilter, "swisstransfer") && isConfigured(config.infomaniakToken) && !config.enableExperimentalSwissTransfer) {
   console.error(
     "[infomaniak-mcp] Note: Swiss Transfer tools are disabled by default because the live upload flow is still experimental. Set ENABLE_EXPERIMENTAL_SWISSTRANSFER=1 to opt in."
   );

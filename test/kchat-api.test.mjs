@@ -3,14 +3,16 @@ import assert from "node:assert/strict";
 
 import { KChatService } from "../dist/services/kchat.js";
 
-function jsonResponse(body, ok = true, status = 200) {
+function jsonResponse(body, ok = true, status = 200, headers = {}) {
   return {
     ok,
     status,
     statusText: ok ? "OK" : "Failure",
     headers: {
       get(name) {
-        return name.toLowerCase() === "content-type" ? "application/json" : "";
+        const normalized = name.toLowerCase();
+        if (normalized === "content-type") return "application/json";
+        return headers[normalized] ?? "";
       },
     },
     async json() {
@@ -39,6 +41,62 @@ test("KChatService resolves the team before listing channels", async () => {
   assert.equal(calls[0].url, "https://acme.kchat.infomaniak.com/api/v4/teams/name/acme");
   assert.equal(calls[0].options.headers.Authorization, "Bearer chat-token");
   assert.equal(calls[1].url, "https://acme.kchat.infomaniak.com/api/v4/teams/team-1/channels?per_page=20&page=2");
+});
+
+test("KChatService accepts a full kChat URL as the team name", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/api/v4/teams/name/acme")) {
+      return jsonResponse({ id: "team-1", name: "acme" });
+    }
+    return jsonResponse([{ id: "channel-1", name: "town-square" }]);
+  };
+
+  const kchat = new KChatService({
+    token: "chat-token",
+    teamName: "https://acme.kchat.infomaniak.com/acme/channels/town-square",
+    fetch: fetchImpl,
+  });
+  await kchat.listChannels({ limit: 5 });
+
+  assert.equal(calls[0].url, "https://acme.kchat.infomaniak.com/api/v4/teams/name/acme");
+});
+
+test("KChatService accepts central kChat URLs with the team in the path", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/api/v4/teams/name/acme")) {
+      return jsonResponse({ id: "team-1", name: "acme" });
+    }
+    return jsonResponse([{ id: "channel-1", name: "town-square" }]);
+  };
+
+  const kchat = new KChatService({
+    token: "chat-token",
+    teamName: "https://kchat.infomaniak.com/acme/channels/town-square",
+    fetch: fetchImpl,
+  });
+  await kchat.listChannels({ limit: 5 });
+
+  assert.equal(calls[0].url, "https://acme.kchat.infomaniak.com/api/v4/teams/name/acme");
+});
+
+test("KChatService reports actionable network errors", async () => {
+  const kchat = new KChatService({
+    token: "chat-token",
+    teamName: "acme",
+    fetch: async () => {
+      throw new Error("fetch failed");
+    },
+    retries: 0,
+  });
+
+  await assert.rejects(
+    () => kchat.listChannels(),
+    /Check KCHAT_TEAM_NAME .* KCHAT_TOKEN/
+  );
 });
 
 test("KChatService replies to a thread by looking up the parent post channel", async () => {
@@ -91,4 +149,58 @@ test("KChatService sends direct messages through a direct channel", async () => 
     channel_id: "direct-channel",
     message: "Heads up.",
   });
+});
+
+test("KChatService reuses direct-message channel lookups for the same username", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/api/v4/users/me")) {
+      return jsonResponse({ id: "current-user" });
+    }
+    if (url.endsWith("/api/v4/users/username/ada")) {
+      return jsonResponse({ id: "recipient-user", username: "ada" });
+    }
+    if (url.endsWith("/api/v4/channels/direct")) {
+      return jsonResponse({ id: "direct-channel" });
+    }
+    return jsonResponse({ id: `dm-post-${calls.length}`, channel_id: "direct-channel" });
+  };
+
+  const kchat = new KChatService({ token: "chat-token", teamName: "acme", fetch: fetchImpl });
+  await kchat.sendDirectMessage("ada", "First.");
+  await kchat.sendDirectMessage("ada", "Second.");
+
+  assert.equal(calls.filter((call) => call.url.endsWith("/api/v4/users/me")).length, 1);
+  assert.equal(calls.filter((call) => call.url.endsWith("/api/v4/users/username/ada")).length, 1);
+  assert.equal(calls.filter((call) => call.url.endsWith("/api/v4/channels/direct")).length, 1);
+  assert.equal(calls.filter((call) => call.url.endsWith("/api/v4/posts")).length, 2);
+});
+
+test("KChatService retries transient rate-limit responses through the shared HTTP client", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (calls.length === 1) {
+      return jsonResponse({ message: "rate limited" }, false, 429, { "retry-after": "0" });
+    }
+    if (url.endsWith("/api/v4/teams/name/acme")) {
+      return jsonResponse({ id: "team-1", name: "acme" });
+    }
+    return jsonResponse([{ id: "channel-1", name: "town-square" }]);
+  };
+
+  const kchat = new KChatService({
+    token: "chat-token",
+    teamName: "acme",
+    fetch: fetchImpl,
+    retries: 1,
+    retryBaseDelayMs: 0,
+  });
+  const channels = await kchat.listChannels({ limit: 5 });
+
+  assert.deepEqual(channels, [{ id: "channel-1", name: "town-square" }]);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].url, "https://acme.kchat.infomaniak.com/api/v4/teams/name/acme");
+  assert.equal(calls[1].url, "https://acme.kchat.infomaniak.com/api/v4/teams/name/acme");
 });

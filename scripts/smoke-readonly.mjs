@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { config as loadDotenv } from "dotenv";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { CallToolResultSchema, ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolResultSchema, ListPromptsResultSchema, ListResourceTemplatesResultSchema, ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js";
 
 const scriptDir = fileURLToPath(new URL(".", import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
@@ -41,6 +41,16 @@ const envKeys = [
   "CALDAV_URL",
   "KCHAT_TOKEN",
   "KCHAT_TEAM_NAME",
+  "INFOMANIAK_PROFILE",
+  "INFOMANIAK_SERVICES",
+  "INFOMANIAK_TOOLS",
+  "INFOMANIAK_DISABLED_TOOLS",
+  "INFOMANIAK_READONLY",
+  "INFOMANIAK_READ_ONLY",
+  "INFOMANIAK_DAV_CACHE_TTL_MS",
+  "INFOMANIAK_TRACE",
+  "STRICT_CONFIRM_EXTERNAL_SEND",
+  "INFOMANIAK_STRICT_CONFIRM_EXTERNAL_SEND",
 ];
 
 const serverEnv = {
@@ -179,6 +189,96 @@ function firstArrayItem(value) {
   return Array.isArray(value) ? value[0] ?? null : null;
 }
 
+function validateReadOnlyToolMetadata(toolsByName) {
+  const readOnlyToolNames = [
+    "infomaniak_help",
+    "mail_list_mailboxes",
+    "mail_list_folders",
+    "mail_query",
+    "mail_read_message",
+    "mail_download_attachment",
+    "mail_search",
+    "mail_find_by_sender",
+    "mail_spam_settings",
+    "mail_spam_cleanup_preview",
+    "mail_filters_list",
+    "kdrive_search",
+    "kdrive_list_files",
+    "kdrive_list_files_page",
+    "kdrive_get_file",
+    "kdrive_download_file",
+    "kdrive_list_file_activities",
+    "kdrive_list_recents",
+    "kdrive_recent_context",
+    "calendar_list_calendars",
+    "calendar_list_events",
+    "meeting_brief",
+    "contacts_list_address_books",
+    "contacts_list",
+    "contacts_query",
+    "contacts_search",
+    "contacts_get",
+    "tasks_list_calendars",
+    "tasks_list",
+    "tasks_search",
+    "tasks_get",
+    "kchat_list_channels",
+    "kchat_get_channel_history",
+    "kchat_get_thread_replies",
+    "kchat_get_users",
+    "kchat_get_user_profile",
+    "chk_list_short_urls",
+    "chk_list_short_urls_page",
+    "mail_triage_summary",
+    "sender_cleanup_plan",
+  ].filter((name) => toolsByName.has(name));
+
+  const failures = [];
+  for (const name of readOnlyToolNames) {
+    const tool = toolsByName.get(name);
+    if (tool.annotations?.readOnlyHint !== true) {
+      failures.push(`${name}: missing readOnlyHint`);
+    }
+    if (tool.annotations?.destructiveHint === true) {
+      failures.push(`${name}: destructiveHint should be false`);
+    }
+    if (!tool.outputSchema) {
+      failures.push(`${name}: missing outputSchema`);
+    }
+  }
+
+  const destructiveTools = [
+    "mail_bulk_delete_confirm",
+    "mail_mark_spam",
+    "mail_spam_cleanup_confirm",
+    "mail_delete_folder",
+    "kdrive_delete",
+    "kdrive_delete_share_link",
+    "kdrive_delete_comment",
+    "calendar_delete_event",
+    "contacts_delete",
+    "tasks_delete",
+    "chk_delete_short_url",
+    "kpaste_read",
+  ].filter((name) => toolsByName.has(name));
+
+  for (const name of destructiveTools) {
+    const tool = toolsByName.get(name);
+    if (tool.annotations?.destructiveHint !== true) {
+      failures.push(`${name}: missing destructiveHint`);
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new Error(failures.join("; "));
+  }
+
+  return {
+    checkedReadOnly: readOnlyToolNames.length,
+    checkedDestructive: destructiveTools.length,
+  };
+}
+
 async function main() {
   if (sendSelfEmail && smokeSelfEmail !== "henrik@ogard.no") {
     throw new Error("Refusing to send smoke email: SMOKE_SELF_EMAIL must be henrik@ogard.no");
@@ -206,14 +306,55 @@ async function main() {
   try {
     const toolsResult = await client.request({ method: "tools/list", params: {} }, ListToolsResultSchema);
     const availableTools = new Set(toolsResult.tools.map((tool) => tool.name));
+    const toolsByName = new Map(toolsResult.tools.map((tool) => [tool.name, tool]));
 
     await runCheck("tools/list", async () => ({
       count: toolsResult.tools.length,
+      hasHelp: hasTool(availableTools, "infomaniak_help"),
       hasMailApi: hasTool(availableTools, "mail_list_mailboxes"),
       hasTasks: hasTool(availableTools, "tasks_list"),
       hasKDrive: hasTool(availableTools, "kdrive_list_files"),
       hasKChat: hasTool(availableTools, "kchat_list_channels"),
     }));
+
+    await runCheck("tool_metadata", async () => validateReadOnlyToolMetadata(toolsByName));
+
+    await runCheck("prompts/list", async () => {
+      const promptsResult = await client.request({ method: "prompts/list", params: {} }, ListPromptsResultSchema);
+      const promptNames = new Set(promptsResult.prompts.map((prompt) => prompt.name));
+      const expected = ["summarize_unread_mail", "prepare_meeting_brief", "organize_sender_cleanup"];
+      const missing = expected.filter((name) => !promptNames.has(name));
+      if (missing.length > 0) {
+        throw new Error(`Missing workflow prompts: ${missing.join(", ")}`);
+      }
+      return {
+        count: promptsResult.prompts.length,
+        workflowPrompts: expected.length,
+      };
+    });
+
+    await runCheck("resources/templates/list", async () => {
+      const resourcesResult = await client.request({ method: "resources/templates/list", params: {} }, ListResourceTemplatesResultSchema);
+      const templateNames = new Set(resourcesResult.resourceTemplates.map((resource) => resource.name));
+      if (!templateNames.has("infomaniak_temp_file")) {
+        throw new Error("Missing infomaniak_temp_file resource template");
+      }
+      return {
+        count: resourcesResult.resourceTemplates.length,
+        hasTempFileTemplate: true,
+      };
+    });
+
+    if (hasTool(availableTools, "infomaniak_help")) {
+      await runCheck("infomaniak_help", async () => {
+        const data = parseJsonContent(await callTool(client, "infomaniak_help", { include_tools: false }));
+        return {
+          totalTools: data.totalTools,
+          groupCount: data.groups?.length ?? 0,
+          workflowCount: data.suggestedWorkflows?.length ?? 0,
+        };
+      });
+    }
 
     if (hasTool(availableTools, "kdrive_list_files")) {
       await runCheck("kdrive_list_files(root)", async () => {
@@ -221,10 +362,28 @@ async function main() {
         return { count: data.length, firstItemShape: data[0] ? Object.keys(data[0]).sort().slice(0, 8) : [] };
       });
 
+      if (hasTool(availableTools, "kdrive_list_files_page")) {
+        await runCheck("kdrive_list_files_page(root)", async () => {
+          const data = parseJsonContent(await callTool(client, "kdrive_list_files_page", { limit: 5 }));
+          return {
+            returned: data.items?.length ?? 0,
+            total: data.total,
+            hasCursor: Boolean(data.nextCursor),
+          };
+        }, { optional: true });
+      }
+
       if (hasTool(availableTools, "kdrive_list_recents")) {
         await runCheck("kdrive_list_recents", async () => {
           const data = parseJsonContent(await callTool(client, "kdrive_list_recents", { limit: 5 }));
           return { type: Array.isArray(data) ? "array" : typeof data, count: Array.isArray(data) ? data.length : undefined };
+        }, { optional: true });
+      }
+
+      if (hasTool(availableTools, "kdrive_recent_context")) {
+        await runCheck("kdrive_recent_context", async () => {
+          const data = parseJsonContent(await callTool(client, "kdrive_recent_context", { limit: 5 }));
+          return { count: data.count, hasItems: Array.isArray(data.items) };
         }, { optional: true });
       }
     }
@@ -245,6 +404,13 @@ async function main() {
         const data = parseJsonContent(await callTool(client, "calendar_list_events", args));
         return { count: data.length };
       }, { optional: true });
+
+      if (hasTool(availableTools, "meeting_brief")) {
+        await runCheck("meeting_brief", async () => {
+          const data = parseJsonContent(await callTool(client, "meeting_brief", { days: 7, limit: 5 }));
+          return { eventCount: data.eventCount, attendeeCount: data.attendeeEmails?.length ?? 0 };
+        }, { optional: true });
+      }
     }
 
     if (hasTool(availableTools, "mail_list_folders")) {
@@ -268,6 +434,7 @@ async function main() {
       });
 
       const inboxArgs = mailboxUuid ? { folder: "INBOX", mailbox_uuid: mailboxUuid, limit: 3, page: 1 } : { folder: "INBOX", limit: 3, page: 1 };
+      const queryArgs = mailboxUuid ? { folder: "INBOX", mailbox_uuid: mailboxUuid, limit: 3 } : { folder: "INBOX", limit: 3 };
       const messages = await runCheck("mail_list_messages(INBOX)", async () => {
         const data = parseJsonContent(await callTool(client, "mail_list_messages", inboxArgs));
         return {
@@ -277,9 +444,34 @@ async function main() {
         };
       }, { optional: !folders });
 
+      const queried = hasTool(availableTools, "mail_query")
+        ? await runCheck("mail_query(INBOX)", async () => {
+            const data = parseJsonContent(await callTool(client, "mail_query", queryArgs));
+            return {
+              total: data.total,
+              returned: data.messages?.length ?? 0,
+              firstMessageHasUid: Boolean(data.messages?.[0]?.uid),
+              hasCursor: Boolean(data.nextCursor),
+            };
+          }, { optional: true })
+        : null;
+
+      if (hasTool(availableTools, "mail_triage_summary")) {
+        await runCheck("mail_triage_summary(INBOX)", async () => {
+          const data = parseJsonContent(await callTool(client, "mail_triage_summary", queryArgs));
+          return {
+            returned: data.returned,
+            flaggedCount: data.flaggedCount,
+            attachmentCount: data.attachmentCount,
+          };
+        }, { optional: true });
+      }
+
       if (messages?.firstMessageHasUid) {
         await runCheck("mail_read_message(first INBOX message)", async () => {
-          const listed = parseJsonContent(await callTool(client, "mail_list_messages", inboxArgs));
+          const listed = queried?.firstMessageHasUid
+            ? parseJsonContent(await callTool(client, "mail_query", queryArgs))
+            : parseJsonContent(await callTool(client, "mail_list_messages", inboxArgs));
           const uid = listed.messages?.[0]?.uid;
           const text = parseTextContent(await callTool(client, "mail_read_message", {
             folder: "INBOX",
@@ -318,6 +510,13 @@ async function main() {
         const data = parseJsonContent(await callTool(client, "contacts_list", {}));
         return { count: data.length, firstContactHasUrl: Boolean(data[0]?.url), addressBooksVisible: books?.count ?? 0 };
       }, { optional: true });
+
+      if (hasTool(availableTools, "contacts_query")) {
+        await runCheck("contacts_query(limit 5)", async () => {
+          const data = parseJsonContent(await callTool(client, "contacts_query", { limit: 5 }));
+          return { count: data.length, firstContactHasUrl: Boolean(data[0]?.url) };
+        }, { optional: true });
+      }
     }
 
     if (hasTool(availableTools, "tasks_list_calendars")) {
@@ -337,6 +536,13 @@ async function main() {
         const data = parseJsonContent(await callTool(client, "chk_list_short_urls", {}));
         return { count: Array.isArray(data) ? data.length : undefined, type: Array.isArray(data) ? "array" : typeof data };
       }, { optional: true });
+
+      if (hasTool(availableTools, "chk_list_short_urls_page")) {
+        await runCheck("chk_list_short_urls_page", async () => {
+          const data = parseJsonContent(await callTool(client, "chk_list_short_urls_page", { limit: 10 }));
+          return { returned: data.items?.length ?? 0, total: data.total };
+        }, { optional: true });
+      }
     }
 
     if (hasTool(availableTools, "ai_list_models")) {

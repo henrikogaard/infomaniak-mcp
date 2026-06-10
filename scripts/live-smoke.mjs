@@ -18,6 +18,7 @@ const mode = process.env.SMOKE_MODE ?? "full";
 
 const rawServerEnv = {
   INFOMANIAK_TOKEN: process.env.INFOMANIAK_TOKEN ?? "",
+  MAIL_TOKEN: process.env.MAIL_TOKEN ?? "",
   KDRIVE_ID: process.env.KDRIVE_ID ?? "",
   AI_PRODUCT_ID: process.env.AI_PRODUCT_ID ?? "",
   ENABLE_EXPERIMENTAL_SWISSTRANSFER: process.env.ENABLE_EXPERIMENTAL_SWISSTRANSFER ?? "",
@@ -31,6 +32,18 @@ const rawServerEnv = {
   SMTP_PORT: process.env.SMTP_PORT ?? "",
   CARDDAV_URL: process.env.CARDDAV_URL ?? "",
   CALDAV_URL: process.env.CALDAV_URL ?? "",
+  KCHAT_TOKEN: process.env.KCHAT_TOKEN ?? "",
+  KCHAT_TEAM_NAME: process.env.KCHAT_TEAM_NAME ?? "",
+  INFOMANIAK_PROFILE: process.env.INFOMANIAK_PROFILE ?? "",
+  INFOMANIAK_SERVICES: process.env.INFOMANIAK_SERVICES ?? "",
+  INFOMANIAK_TOOLS: process.env.INFOMANIAK_TOOLS ?? "",
+  INFOMANIAK_DISABLED_TOOLS: process.env.INFOMANIAK_DISABLED_TOOLS ?? "",
+  INFOMANIAK_READONLY: process.env.INFOMANIAK_READONLY ?? "",
+  INFOMANIAK_READ_ONLY: process.env.INFOMANIAK_READ_ONLY ?? "",
+  INFOMANIAK_DAV_CACHE_TTL_MS: process.env.INFOMANIAK_DAV_CACHE_TTL_MS ?? "",
+  INFOMANIAK_TRACE: process.env.INFOMANIAK_TRACE ?? "",
+  STRICT_CONFIRM_EXTERNAL_SEND: process.env.STRICT_CONFIRM_EXTERNAL_SEND ?? "",
+  INFOMANIAK_STRICT_CONFIRM_EXTERNAL_SEND: process.env.INFOMANIAK_STRICT_CONFIRM_EXTERNAL_SEND ?? "",
 };
 
 const serverEnv = Object.fromEntries(
@@ -59,6 +72,7 @@ const expectedTools = [
   "calendar_delete_event",
   "mail_list_folders",
   "mail_list_messages",
+  "mail_query",
   "mail_read_message",
   "mail_download_attachment",
   "mail_search",
@@ -372,7 +386,14 @@ async function main() {
       return { total: data.total, sample: data.messages.slice(0, 3) };
     });
 
-    const firstInboxUid = inboxMessages?.sample?.[0]?.uid;
+    const inboxQuery = availableTools.has("mail_query")
+      ? await runCheck("mail_query", async () => {
+          const data = parseJsonContent(await callTool(client, "mail_query", { folder: "INBOX", limit: 5 }));
+          return { total: data.total, sample: data.messages.slice(0, 3), hasCursor: Boolean(data.nextCursor) };
+        })
+      : null;
+
+    const firstInboxUid = inboxQuery?.sample?.[0]?.uid ?? inboxMessages?.sample?.[0]?.uid;
     if (firstInboxUid) {
       await runCheck("mail_read_message", async () => {
         const text = parseTextContent(await callTool(client, "mail_read_message", { folder: "INBOX", uid: firstInboxUid }));
@@ -380,9 +401,9 @@ async function main() {
       });
 
       await runCheck("mail_search(existing)", async () => {
-        const subject = inboxMessages.sample[0]?.subject?.split(" ").slice(0, 2).join(" ");
-        const data = parseJsonContent(await callTool(client, "mail_search", { folder: "INBOX", query: subject, limit: 5 }));
-        return data.slice(0, 3);
+        const subject = (inboxQuery?.sample?.[0] ?? inboxMessages.sample[0])?.subject?.split(" ").slice(0, 2).join(" ");
+        const data = parseJsonContent(await callTool(client, "mail_query", { folder: "INBOX", query: subject, limit: 5 }));
+        return data.messages.slice(0, 3);
       });
     }
 
@@ -456,7 +477,7 @@ async function main() {
 
         await runCheck("mail_move", async () => {
           const text = parseTextContent(await callTool(client, "mail_move", {
-            folder: "INBOX",
+            folder: temp.mailFolder,
             uid: temp.mailUid,
             destination: "Trash",
           }));
@@ -529,6 +550,7 @@ async function main() {
         await runCheck("contacts_delete", async () => {
           const text = parseTextContent(await callTool(client, "contacts_delete", {
             contact_url: temp.contactUrl,
+            confirmation: `DELETE CONTACT ${temp.contactUrl}`,
           }));
           temp.contactUrl = null;
           return text;
@@ -552,7 +574,7 @@ async function main() {
 
       if (createdShort && temp.chkId) {
         await runCheck("chk_delete_short_url", async () => {
-          const text = parseTextContent(await callTool(client, "chk_delete_short_url", { id: temp.chkId }));
+          const text = parseTextContent(await callTool(client, "chk_delete_short_url", { id: temp.chkId, confirmation: `DELETE SHORT URL ${temp.chkId}` }));
           temp.chkId = null;
           return text;
         });
@@ -681,7 +703,10 @@ async function main() {
 
     if (temp.kmeetEventId) {
       await runCheck("calendar_delete_event(kmeet cleanup)", async () => {
-        const text = parseTextContent(await callTool(client, "calendar_delete_event", { event_id: String(temp.kmeetEventId) }));
+        const text = parseTextContent(await callTool(client, "calendar_delete_event", {
+          event_id: String(temp.kmeetEventId),
+          confirmation: `DELETE EVENT ${temp.kmeetEventId}`,
+        }));
         temp.kmeetEventId = null;
         return text;
       }, { optional: true });
@@ -689,7 +714,10 @@ async function main() {
 
     if (temp.calendarEventId) {
       await runCheck("calendar_delete_event", async () => {
-        const text = parseTextContent(await callTool(client, "calendar_delete_event", { event_id: String(temp.calendarEventId) }));
+        const text = parseTextContent(await callTool(client, "calendar_delete_event", {
+          event_id: String(temp.calendarEventId),
+          confirmation: `DELETE EVENT ${temp.calendarEventId}`,
+        }));
         temp.calendarEventId = null;
         return text;
       }, { cleanup: "done" });
@@ -697,7 +725,7 @@ async function main() {
 
     for (const fileId of [...temp.kdriveFiles]) {
       await runCheck(`kdrive_delete(file:${fileId})`, async () => {
-        const text = parseTextContent(await callTool(client, "kdrive_delete", { file_id: fileId }));
+        const text = parseTextContent(await callTool(client, "kdrive_delete", { file_id: fileId, confirmation: `MOVE ${fileId} TO TRASH` }));
         temp.kdriveFiles = temp.kdriveFiles.filter((id) => id !== fileId);
         return text;
       }, { optional: true });
@@ -705,7 +733,7 @@ async function main() {
 
     for (const folderId of [...temp.kdriveFolders].reverse()) {
       await runCheck(`kdrive_delete(folder:${folderId})`, async () => {
-        const text = parseTextContent(await callTool(client, "kdrive_delete", { file_id: folderId }));
+        const text = parseTextContent(await callTool(client, "kdrive_delete", { file_id: folderId, confirmation: `MOVE ${folderId} TO TRASH` }));
         temp.kdriveFolders = temp.kdriveFolders.filter((id) => id !== folderId);
         return text;
       }, { optional: true });
@@ -713,7 +741,10 @@ async function main() {
 
     if (temp.contactUrl) {
       await runCheck("contacts_delete(cleanup)", async () => {
-        const text = parseTextContent(await callTool(client, "contacts_delete", { contact_url: temp.contactUrl }));
+        const text = parseTextContent(await callTool(client, "contacts_delete", {
+          contact_url: temp.contactUrl,
+          confirmation: `DELETE CONTACT ${temp.contactUrl}`,
+        }));
         temp.contactUrl = null;
         return text;
       }, { optional: true });
@@ -721,7 +752,10 @@ async function main() {
 
     if (temp.chkId) {
       await runCheck("chk_delete_short_url(cleanup)", async () => {
-        const text = parseTextContent(await callTool(client, "chk_delete_short_url", { id: temp.chkId }));
+        const text = parseTextContent(await callTool(client, "chk_delete_short_url", {
+          id: temp.chkId,
+          confirmation: `DELETE SHORT URL ${temp.chkId}`,
+        }));
         temp.chkId = null;
         return text;
       }, { optional: true });

@@ -44,6 +44,13 @@ const envKeys = [
   "CALDAV_URL",
   "KCHAT_TOKEN",
   "KCHAT_TEAM_NAME",
+  "INFOMANIAK_PROFILE",
+  "INFOMANIAK_SERVICES",
+  "INFOMANIAK_TOOLS",
+  "INFOMANIAK_DISABLED_TOOLS",
+  "INFOMANIAK_TRACE",
+  "STRICT_CONFIRM_EXTERNAL_SEND",
+  "INFOMANIAK_STRICT_CONFIRM_EXTERNAL_SEND",
 ];
 
 const serverEnv = {
@@ -294,11 +301,11 @@ async function main() {
           throw new Error("Moved kDrive file was not found in the destination folder");
         }
 
-        await callTool(client, "kdrive_delete", { file_id: uploaded.id });
+        await callTool(client, "kdrive_delete", { file_id: uploaded.id, confirmation: `MOVE ${uploaded.id} TO TRASH` });
         created.kdriveFileIds = created.kdriveFileIds.filter((id) => id !== uploaded.id);
-        await callTool(client, "kdrive_delete", { file_id: folderA.id });
+        await callTool(client, "kdrive_delete", { file_id: folderA.id, confirmation: `MOVE ${folderA.id} TO TRASH` });
         created.kdriveFolderIds = created.kdriveFolderIds.filter((id) => id !== folderA.id);
-        await callTool(client, "kdrive_delete", { file_id: folderB.id });
+        await callTool(client, "kdrive_delete", { file_id: folderB.id, confirmation: `MOVE ${folderB.id} TO TRASH` });
         created.kdriveFolderIds = created.kdriveFolderIds.filter((id) => id !== folderB.id);
 
         return {
@@ -335,7 +342,7 @@ async function main() {
           description: "Owned write smoke event updated",
         }));
 
-        await callTool(client, "calendar_delete_event", { event_id: String(event.id) });
+        await callTool(client, "calendar_delete_event", { event_id: String(event.id), confirmation: `DELETE EVENT ${event.id}` });
         created.calendarEventIds = created.calendarEventIds.filter((id) => id !== String(event.id));
         return { calendarId: calendar.id, eventIdPresent: Boolean(event.id), updatedTitle: updated.title, cleanup: "deleted created event" };
       });
@@ -361,7 +368,7 @@ async function main() {
           completed: true,
         }));
 
-        await callTool(client, "tasks_delete", { task_id: task.id });
+        await callTool(client, "tasks_delete", { task_id: task.id, confirmation: `DELETE TASK ${task.id}` });
         created.taskIds = created.taskIds.filter((id) => id !== task.id);
         return {
           taskIdPresent: Boolean(task.id),
@@ -389,7 +396,7 @@ async function main() {
         });
         const contact = parseJsonContent(await callTool(client, "contacts_get", { contact_url: contactUrl }));
 
-        await callTool(client, "contacts_delete", { contact_url: contactUrl });
+        await callTool(client, "contacts_delete", { contact_url: contactUrl, confirmation: `DELETE CONTACT ${contactUrl}` });
         created.contactUrls = created.contactUrls.filter((url) => url !== contactUrl);
         return { contactUrlPresent: Boolean(contactUrl), displayName: contact.displayName, cleanup: "deleted created contact" };
       });
@@ -404,7 +411,7 @@ async function main() {
         if (!id) throw new Error(`Could not identify Chk id from ${JSON.stringify(shortUrl)}`);
         created.chkIds.push(String(id));
         await callTool(client, "chk_list_short_urls", {});
-        await callTool(client, "chk_delete_short_url", { id: String(id) });
+        await callTool(client, "chk_delete_short_url", { id: String(id), confirmation: `DELETE SHORT URL ${id}` });
         created.chkIds = created.chkIds.filter((entry) => entry !== String(id));
         return { idPresent: Boolean(id), shortUrlPresent: Boolean(shortUrl.short_url ?? shortUrl.url), cleanup: "deleted created short URL" };
       });
@@ -438,7 +445,7 @@ async function main() {
 
     for (const id of [...created.chkIds]) {
       await cleanup(`chk:${id}`, async () => {
-        await callTool(client, "chk_delete_short_url", { id });
+        await callTool(client, "chk_delete_short_url", { id, confirmation: `DELETE SHORT URL ${id}` });
         created.chkIds = created.chkIds.filter((entry) => entry !== id);
         return "deleted";
       });
@@ -446,7 +453,7 @@ async function main() {
 
     for (const url of [...created.contactUrls]) {
       await cleanup(`contact:${url}`, async () => {
-        await callTool(client, "contacts_delete", { contact_url: url });
+        await callTool(client, "contacts_delete", { contact_url: url, confirmation: `DELETE CONTACT ${url}` });
         created.contactUrls = created.contactUrls.filter((entry) => entry !== url);
         return "deleted";
       });
@@ -454,7 +461,7 @@ async function main() {
 
     for (const id of [...created.taskIds]) {
       await cleanup(`task:${id}`, async () => {
-        await callTool(client, "tasks_delete", { task_id: id });
+        await callTool(client, "tasks_delete", { task_id: id, confirmation: `DELETE TASK ${id}` });
         created.taskIds = created.taskIds.filter((entry) => entry !== id);
         return "deleted";
       });
@@ -462,7 +469,7 @@ async function main() {
 
     for (const id of [...created.calendarEventIds]) {
       await cleanup(`calendar:${id}`, async () => {
-        await callTool(client, "calendar_delete_event", { event_id: id });
+        await callTool(client, "calendar_delete_event", { event_id: id, confirmation: `DELETE EVENT ${id}` });
         created.calendarEventIds = created.calendarEventIds.filter((entry) => entry !== id);
         return "deleted";
       });
@@ -470,7 +477,7 @@ async function main() {
 
     for (const id of [...created.kdriveFileIds]) {
       await cleanup(`kdrive-file:${id}`, async () => {
-        await callTool(client, "kdrive_delete", { file_id: id });
+        await callTool(client, "kdrive_delete", { file_id: id, confirmation: `MOVE ${id} TO TRASH` });
         created.kdriveFileIds = created.kdriveFileIds.filter((entry) => entry !== id);
         return "deleted";
       });
@@ -478,7 +485,7 @@ async function main() {
 
     for (const id of [...created.kdriveFolderIds].reverse()) {
       await cleanup(`kdrive-folder:${id}`, async () => {
-        await callTool(client, "kdrive_delete", { file_id: id });
+        await callTool(client, "kdrive_delete", { file_id: id, confirmation: `MOVE ${id} TO TRASH` });
         created.kdriveFolderIds = created.kdriveFolderIds.filter((entry) => entry !== id);
         return "deleted";
       });

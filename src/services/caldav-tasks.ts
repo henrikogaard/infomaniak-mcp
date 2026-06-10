@@ -22,6 +22,12 @@ export interface CalDAVTask {
   completedAt?: string;
 }
 
+export interface CalDAVTasksServiceOptions {
+  cacheTtlMs?: number;
+  now?: () => number;
+  createClient?: (serverUrl: string) => DAVClient;
+}
+
 interface TaskSource {
   url: string;
   etag?: string;
@@ -84,32 +90,34 @@ const VTODO_FILTERS = [
 export class CalDAVTasksService {
   private config: Config;
   private client: DAVClient | null = null;
+  private calendarsCache: { value: DAVCalendar[]; expiresAt: number } | null = null;
+  private cacheTtlMs: number;
+  private now: () => number;
+  private createClient: (serverUrl: string) => DAVClient;
 
-  constructor(config: Config) {
+  constructor(config: Config, options: CalDAVTasksServiceOptions = {}) {
     this.config = config;
-  }
-
-  private async getClient(): Promise<DAVClient> {
-    if (this.client) {
-      try {
-        await this.client.fetchCalendars();
-        return this.client;
-      } catch {
-        this.client = null;
-      }
-    }
-
-    console.error(`[CalDAV] Connecting to ${this.config.calDavUrl} as ${this.config.davUser}`);
-
-    const client = new DAVClient({
-      serverUrl: this.config.calDavUrl,
+    this.cacheTtlMs = options.cacheTtlMs ?? config.davCacheTtlMs ?? 30000;
+    this.now = options.now ?? Date.now;
+    this.createClient = options.createClient ?? ((serverUrl) => new DAVClient({
+      serverUrl,
       credentials: {
         username: this.config.davUser,
         password: this.config.davPassword,
       },
       authMethod: "Basic",
       defaultAccountType: "caldav",
-    });
+    }));
+  }
+
+  private async getClient(): Promise<DAVClient> {
+    if (this.client) {
+      return this.client;
+    }
+
+    console.error(`[CalDAV] Connecting to ${this.config.calDavUrl} as ${this.config.davUser}`);
+
+    const client = this.createClient(this.config.calDavUrl);
 
     try {
       await client.login();
@@ -119,15 +127,7 @@ export class CalDAVTasksService {
 
       if (msg.includes("homeUrl")) {
         console.error("[CalDAV] Retrying with /.well-known/caldav appended to serverUrl");
-        const fallbackClient = new DAVClient({
-          serverUrl: `${this.config.calDavUrl.replace(/\/+$/, "")}/.well-known/caldav`,
-          credentials: {
-            username: this.config.davUser,
-            password: this.config.davPassword,
-          },
-          authMethod: "Basic",
-          defaultAccountType: "caldav",
-        });
+        const fallbackClient = this.createClient(`${this.config.calDavUrl.replace(/\/+$/, "")}/.well-known/caldav`);
         await fallbackClient.login();
         this.client = fallbackClient;
         console.error("[CalDAV] Connected (via .well-known fallback)");
@@ -245,8 +245,27 @@ export class CalDAVTasksService {
   }
 
   private async fetchTaskCalendars(client: DAVClient): Promise<DAVCalendar[]> {
-    const calendars = await client.fetchCalendars();
-    return calendars.filter(calendarSupportsTasks);
+    if (this.calendarsCache && this.calendarsCache.expiresAt > this.now()) {
+      return this.calendarsCache.value;
+    }
+
+    const calendars = (await this.fetchCalendarsWithRetry(client)).filter(calendarSupportsTasks);
+    this.calendarsCache = {
+      value: calendars,
+      expiresAt: this.now() + this.cacheTtlMs,
+    };
+    return calendars;
+  }
+
+  private async fetchCalendarsWithRetry(client: DAVClient): Promise<DAVCalendar[]> {
+    try {
+      return await client.fetchCalendars();
+    } catch {
+      this.client = null;
+      this.calendarsCache = null;
+      const retryClient = await this.getClient();
+      return retryClient.fetchCalendars();
+    }
   }
 
   private async fetchCalendarTasks(client: DAVClient, calendar: DAVCalendar): Promise<CalDAVTask[]> {

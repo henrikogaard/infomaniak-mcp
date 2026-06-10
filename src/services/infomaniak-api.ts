@@ -1,8 +1,15 @@
 import type { Config } from "../config.js";
+import { ThrottledHttpClient } from "./http-client.js";
 
 const BASE_URL = "https://api.infomaniak.com";
 
 export class InfomaniakAPI {
+  private readonly http = new ThrottledHttpClient({
+    maxConcurrent: 4,
+    retries: 2,
+    timeoutMs: 30_000,
+  });
+
   constructor(private config: Config) {}
 
   async request(path: string, options: RequestInit = {}): Promise<unknown> {
@@ -17,7 +24,7 @@ export class InfomaniakAPI {
       headers["Content-Type"] = "application/json";
     }
 
-    const res = await fetch(url, {
+    const res = await this.http.fetch(url, {
       ...options,
       headers: {
         ...headers,
@@ -30,7 +37,7 @@ export class InfomaniakAPI {
       throw new Error(`Infomaniak API ${method} ${path} → ${res.status}: ${body}`);
     }
 
-    const contentType = res.headers.get("content-type") ?? "";
+    const contentType = res.headers?.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
       return res.json();
     }
@@ -62,7 +69,7 @@ export class InfomaniakAPI {
 
   async downloadRaw(path: string): Promise<Buffer> {
     const url = `${BASE_URL}${path}`;
-    const res = await fetch(url, {
+    const res = await this.http.fetch(url, {
       headers: {
         Authorization: `Bearer ${this.config.infomaniakToken}`,
       },
@@ -70,12 +77,15 @@ export class InfomaniakAPI {
     if (!res.ok) {
       throw new Error(`Infomaniak download ${res.status}: ${await res.text()}`);
     }
+    if (!res.arrayBuffer) {
+      throw new Error("Infomaniak download response did not expose binary content.");
+    }
     return Buffer.from(await res.arrayBuffer());
   }
 
   async uploadRaw(path: string, body: Buffer, contentType: string): Promise<unknown> {
     const url = `${BASE_URL}${path}`;
-    const res = await fetch(url, {
+    const res = await this.http.fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${this.config.infomaniakToken}`,
@@ -86,7 +96,7 @@ export class InfomaniakAPI {
     if (!res.ok) {
       throw new Error(`Infomaniak upload ${res.status}: ${await res.text()}`);
     }
-    const ct = res.headers.get("content-type") ?? "";
+    const ct = res.headers?.get("content-type") ?? "";
     if (ct.includes("application/json")) {
       return res.json();
     }

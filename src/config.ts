@@ -33,6 +33,14 @@ export interface Config {
   // kChat credentials
   kchatToken: string;
   kchatTeamName: string;
+  // Tool/service filtering and safety controls
+  enabledServices: string;
+  enabledTools: string;
+  disabledTools: string;
+  toolProfile: string;
+  readOnly: boolean;
+  davCacheTtlMs: number;
+  strictExternalSend: boolean;
 }
 
 function parseBooleanEnv(value: string | undefined): boolean {
@@ -51,6 +59,12 @@ function loadEnvFiles(): void {
     if (!existsSync(envPath)) continue;
     loadDotenv({ path: envPath, override: false });
   }
+}
+
+function parsePositiveIntegerEnv(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 export function loadConfig(): Config {
@@ -78,5 +92,12 @@ export function loadConfig(): Config {
     enableExperimentalSwissTransfer: parseBooleanEnv(process.env.ENABLE_EXPERIMENTAL_SWISSTRANSFER),
     kchatToken: process.env.KCHAT_TOKEN ?? "",
     kchatTeamName: process.env.KCHAT_TEAM_NAME ?? "",
+    enabledServices: process.env.INFOMANIAK_SERVICES ?? "",
+    enabledTools: process.env.INFOMANIAK_TOOLS ?? "",
+    disabledTools: process.env.INFOMANIAK_DISABLED_TOOLS ?? "",
+    toolProfile: process.env.INFOMANIAK_PROFILE ?? "",
+    readOnly: parseBooleanEnv(process.env.INFOMANIAK_READONLY ?? process.env.INFOMANIAK_READ_ONLY),
+    davCacheTtlMs: parsePositiveIntegerEnv(process.env.INFOMANIAK_DAV_CACHE_TTL_MS, 30000),
+    strictExternalSend: parseBooleanEnv(process.env.STRICT_CONFIRM_EXTERNAL_SEND ?? process.env.INFOMANIAK_STRICT_CONFIRM_EXTERNAL_SEND),
   };
 }

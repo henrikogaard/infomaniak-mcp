@@ -27,6 +27,8 @@ interface CalendarEvent {
   timezone_end?: string;
   freebusy?: string;
   attendees?: Attendee[];
+  rrule?: string | null;
+  reminders?: Reminder[];
   [key: string]: unknown;
 }
 
@@ -38,10 +40,16 @@ interface Attendee {
   className?: string;
 }
 
+interface Reminder {
+  minutes_before: number;
+}
+
 export class CalendarService {
   private api: InfomaniakAPI;
   private timezone: string | null = null;
   private userEmail: string | null = null;
+  private calendarCache: { calendars: Calendar[]; expiresAt: number } | null = null;
+  private readonly calendarCacheMs = 60_000;
 
   constructor(config: Config) {
     this.api = new InfomaniakAPI(config);
@@ -61,11 +69,17 @@ export class CalendarService {
   }
 
   async listCalendars(): Promise<Calendar[]> {
+    if (this.calendarCache && this.calendarCache.expiresAt > Date.now()) {
+      return this.calendarCache.calendars;
+    }
+
     const res = (await this.api.get(
       "/1/calendar/pim/calendar"
     )) as ApiResponse;
     const data = (res.data ?? {}) as { calendars?: Calendar[] };
-    return data.calendars ?? [];
+    const calendars = data.calendars ?? [];
+    this.calendarCache = { calendars, expiresAt: Date.now() + this.calendarCacheMs };
+    return calendars;
   }
 
   async listEvents(from: string, to: string, calendarId?: string): Promise<CalendarEvent[]> {
@@ -73,17 +87,16 @@ export class CalendarService {
       ? [{ id: calendarId }]
       : await this.listCalendars();
 
-    const allEvents: CalendarEvent[] = [];
-    for (const cal of calendars) {
+    const eventGroups = await Promise.all(calendars.map(async (cal) => {
       const res = (await this.api.get("/1/calendar/pim/event", {
         calendar_id: String(cal.id),
         from: formatDateForApi(from),
         to: formatDateForApi(to),
       })) as ApiResponse;
-      const events = (res.data ?? []) as CalendarEvent[];
-      allEvents.push(...events);
-    }
-    return allEvents;
+      return (res.data ?? []) as CalendarEvent[];
+    }));
+
+    return eventGroups.flat();
   }
 
   async createEvent(params: {
@@ -94,6 +107,8 @@ export class CalendarService {
     calendarId?: string;
     attendees?: string[];
     fullDay?: boolean;
+    recurrenceRule?: string;
+    reminderMinutes?: number[];
   }): Promise<CalendarEvent> {
     const { timezone, email } = await this.getUserProfile();
     const calendars = await this.listCalendars();
@@ -127,6 +142,10 @@ export class CalendarService {
       timezone_end: timezone,
       attendees: attendeeList,
     };
+    addRecurrenceAndReminders(body, {
+      recurrenceRule: params.recurrenceRule,
+      reminderMinutes: params.reminderMinutes,
+    });
 
     const res = (await this.api.post("/1/calendar/pim/event", body)) as ApiResponse;
     return res.data as CalendarEvent;
@@ -141,6 +160,10 @@ export class CalendarService {
     start?: string;
     end?: string;
     description?: string;
+    recurrenceRule?: string;
+    clearRecurrence?: boolean;
+    reminderMinutes?: number[];
+    clearReminders?: boolean;
   }): Promise<CalendarEvent> {
     const { timezone } = await this.getUserProfile();
     const current = await this.findEventById(eventId);
@@ -158,6 +181,14 @@ export class CalendarService {
 
     const freebusy = normalizeOptionalString(current.freebusy);
     if (freebusy !== undefined) body.freebusy = freebusy;
+    addRecurrenceAndReminders(body, {
+      recurrenceRule: params.recurrenceRule,
+      clearRecurrence: params.clearRecurrence,
+      fallbackRecurrenceRule: current.rrule,
+      reminderMinutes: params.reminderMinutes,
+      clearReminders: params.clearReminders,
+      fallbackReminders: current.reminders,
+    });
 
     const res = (await this.api.put(`/1/calendar/pim/event/${eventId}`, body)) as ApiResponse;
     return res.data as CalendarEvent;
@@ -253,4 +284,51 @@ function normalizeString(value: unknown, fallback: string, defaultValue: string)
     return fallback;
   }
   return defaultValue;
+}
+
+function addRecurrenceAndReminders(
+  body: Record<string, unknown>,
+  options: {
+    recurrenceRule?: string;
+    clearRecurrence?: boolean;
+    fallbackRecurrenceRule?: string | null;
+    reminderMinutes?: number[];
+    clearReminders?: boolean;
+    fallbackReminders?: Reminder[];
+  }
+): void {
+  if (options.clearRecurrence) {
+    body.rrule = null;
+  } else if (options.recurrenceRule !== undefined) {
+    body.rrule = normalizeRecurrenceRule(options.recurrenceRule);
+  } else if (typeof options.fallbackRecurrenceRule === "string" && options.fallbackRecurrenceRule.length > 0) {
+    body.rrule = options.fallbackRecurrenceRule;
+  }
+
+  if (options.clearReminders) {
+    body.reminders = [];
+  } else if (options.reminderMinutes !== undefined) {
+    body.reminders = normalizeReminderMinutes(options.reminderMinutes);
+  } else if (options.fallbackReminders !== undefined) {
+    body.reminders = options.fallbackReminders;
+  }
+}
+
+function normalizeRecurrenceRule(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error("Recurrence rule must not be empty.");
+  }
+  return trimmed.toUpperCase().startsWith("RRULE:")
+    ? trimmed.slice("RRULE:".length)
+    : trimmed;
+}
+
+function normalizeReminderMinutes(values: number[]): Reminder[] {
+  return [...new Set(values.map((value) => {
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error("Reminder minutes must be zero or a positive number.");
+    }
+    return Math.floor(value);
+  }))].sort((left, right) => left - right).map((minutes) => ({ minutes_before: minutes }));
 }

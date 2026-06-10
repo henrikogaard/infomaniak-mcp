@@ -1,20 +1,25 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AIService } from "../services/ai.js";
-import { safeHandler, textResult, jsonResult } from "../tool-handler.js";
+import { textResult, jsonResult } from "../tool-handler.js";
+import { arrayOutputSchema, objectOutputSchema, readOnlyTool, registerStructuredTool, textOutputSchema } from "./register.js";
 
 export function registerAITools(server: McpServer, ai: AIService) {
-  server.tool(
+  registerStructuredTool(
+    server,
     "ai_list_models",
     "List available AI models on Infomaniak AI Tools (Euria)",
     {},
-    safeHandler(async () => {
+    readOnlyTool,
+    async () => {
       const models = await ai.listModels();
       return jsonResult(models);
-    })
+    },
+    arrayOutputSchema
   );
 
-  server.tool(
+  registerStructuredTool(
+    server,
     "ai_chat",
     "Send a chat completion request to Infomaniak AI (Euria). Useful for summarization, translation, text processing using sovereign Swiss AI. All processing stays in Swiss data centers.",
     {
@@ -26,7 +31,8 @@ export function registerAITools(server: McpServer, ai: AIService) {
       temperature: z.number().optional().describe("Temperature (0-1)"),
       max_tokens: z.number().optional().describe("Max tokens to generate"),
     },
-    safeHandler(async ({ messages, model, temperature, max_tokens }) => {
+    readOnlyTool,
+    async ({ messages, model, temperature, max_tokens }) => {
       const result = await ai.chatCompletion({
         messages, model, temperature, maxTokens: max_tokens,
       });
@@ -35,10 +41,12 @@ export function registerAITools(server: McpServer, ai: AIService) {
         ? `\n\n[Tokens: ${result.usage.prompt_tokens} prompt + ${result.usage.completion_tokens} completion = ${result.usage.total_tokens} total]`
         : "";
       return textResult(reply + usage);
-    })
+    },
+    textOutputSchema
   );
 
-  server.tool(
+  registerStructuredTool(
+    server,
     "ai_embeddings",
     "Generate vector embeddings using Infomaniak AI. Useful for semantic search across emails, files, and contacts.",
     {
@@ -48,22 +56,27 @@ export function registerAITools(server: McpServer, ai: AIService) {
       ]).describe("Text(s) to generate embeddings for"),
       model: z.string().optional().describe("Embedding model name"),
     },
-    safeHandler(async ({ input, model }) => {
+    readOnlyTool,
+    async ({ input, model }) => {
       const result = await ai.generateEmbeddings({ input, model });
       return jsonResult(result);
-    })
+    },
+    objectOutputSchema
   );
 
-  server.tool(
+  registerStructuredTool(
+    server,
     "ai_transcribe",
     "Transcribe audio to text using Infomaniak AI (Whisper). Pass base64-encoded audio content. Works with files downloaded from kDrive via kdrive_download_file.",
     {
       audio_base64: z.string().describe("Base64-encoded audio file content"),
       filename: z.string().describe("Original filename (e.g. meeting.mp3, voicemail.wav)"),
     },
-    safeHandler(async ({ audio_base64, filename }) => {
+    readOnlyTool,
+    async ({ audio_base64, filename }) => {
       const text = await ai.transcribeAudio(audio_base64, filename);
-      return { content: [{ type: "text", text }] };
-    })
+      return textResult(text);
+    },
+    textOutputSchema
   );
 }
