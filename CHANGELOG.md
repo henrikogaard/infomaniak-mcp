@@ -4,6 +4,18 @@
 
 No changes yet.
 
+## [1.1.0] - 2026-07-28
+
+### Added
+- Mail: native Mail API attachment download plus attachment upload for sent messages and saved drafts, with IMAP/SMTP fallback retained
+- kDrive: real API cursor pagination, directory-scoped search, email access invitations, and shared-with-me reads
+- kChat: file upload, file attachments on posts/replies, and team-wide post search
+
+### Changed
+- Mail: aligned folder rename with the upstream `/folder/{id}/rename` endpoint
+- Release: bumped package and MCP metadata to `1.1.0`
+- Docs: updated service counts, capabilities, and Mail/kDrive/kChat API coverage
+
 ## [1.0.0] - 2026-06-10
 
 ### Added
@@ -138,12 +150,11 @@ No changes yet.
 - [ ] Chk create/delete response shapes with a live user account
 
 ### Missing features
-- [ ] Mail API: attachment download and attachment sending without IMAP/SMTP fallback
 - [ ] Mail: connection pooling for IMAP/SMTP fallback operations
 - [ ] Calendar: RSVP / invitation handling
 - [ ] Swiss Transfer: download a received transfer
 - [ ] Swiss Transfer: list past transfers
-- [ ] kChat: file upload/download and webhook/command management
+- [ ] kChat: file download and webhook/command management
 - [ ] Newsletter: campaign management belongs in the separate tenant/admin MCP unless Infomaniak exposes user-scoped newsletter APIs
 
 ### API verification needed

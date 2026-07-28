@@ -32,6 +32,15 @@ interface ListOptions {
   page?: number;
 }
 
+export interface KChatSearchOptions {
+  terms: string;
+  isOrSearch?: boolean;
+  timeZoneOffset?: number;
+  includeDeletedChannels?: boolean;
+  page?: number;
+  perPage?: number;
+}
+
 export class KChatService {
   private readonly token: string;
   private readonly teamName: string;
@@ -69,13 +78,16 @@ export class KChatService {
     return this.request(`/teams/${encodeURIComponent(team.id)}/channels?${params}`);
   }
 
-  async postMessage(channelId: string, text: string, threadId?: string): Promise<unknown> {
-    const body: Record<string, string> = {
+  async postMessage(channelId: string, text: string, threadId?: string, fileIds?: string[]): Promise<unknown> {
+    const body: Record<string, unknown> = {
       channel_id: channelId,
       message: text,
     };
     if (threadId) {
       body.root_id = threadId;
+    }
+    if (fileIds?.length) {
+      body.file_ids = fileIds;
     }
     return this.request("/posts", {
       method: "POST",
@@ -83,12 +95,36 @@ export class KChatService {
     });
   }
 
-  async replyToThread(threadId: string, text: string): Promise<unknown> {
+  async replyToThread(threadId: string, text: string, fileIds?: string[]): Promise<unknown> {
     const post = await this.getPost(threadId);
     if (!post.channel_id) {
       throw new Error(`kChat post ${threadId} did not include a channel_id.`);
     }
-    return this.postMessage(post.channel_id, text, threadId);
+    return this.postMessage(post.channel_id, text, threadId, fileIds);
+  }
+
+  async uploadFile(channelId: string, filename: string, base64Content: string, contentType = "application/octet-stream"): Promise<unknown> {
+    const params = new URLSearchParams({ channel_id: channelId, filename });
+    return this.request(`/files?${params}`, {
+      method: "POST",
+      headers: { "Content-Type": contentType },
+      body: new Uint8Array(Buffer.from(base64Content, "base64")),
+    });
+  }
+
+  async searchPosts(options: KChatSearchOptions): Promise<unknown> {
+    const team = await this.getTeamByName();
+    return this.request(`/teams/${encodeURIComponent(team.id)}/posts/search`, {
+      method: "POST",
+      body: JSON.stringify({
+        terms: options.terms,
+        is_or_search: options.isOrSearch ?? false,
+        ...(options.timeZoneOffset === undefined ? {} : { time_zone_offset: options.timeZoneOffset }),
+        ...(options.includeDeletedChannels === undefined ? {} : { include_deleted_channels: options.includeDeletedChannels }),
+        ...(options.page === undefined ? {} : { page: options.page }),
+        ...(options.perPage === undefined ? {} : { per_page: options.perPage }),
+      }),
+    });
   }
 
   async addReaction(postId: string, emojiName: string): Promise<unknown> {

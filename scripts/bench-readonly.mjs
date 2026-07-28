@@ -208,7 +208,7 @@ async function main() {
 
   const client = new Client({
     name: "infomaniak-readonly-bench",
-    version: "1.0.0",
+    version: "1.1.0",
   });
   client.onerror = (error) => {
     stderrChunks.push(`\n[client-error] ${summarizeError(error)}`);

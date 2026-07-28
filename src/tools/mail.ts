@@ -222,13 +222,14 @@ export function registerMailTools(server: McpServer, mail: MailToolService, opti
     {
       folder: z.string().describe("Folder path (e.g. INBOX)"),
       uid: uidSchema.describe("Message UID"),
+      mailbox_uuid: z.string().optional().describe("Optional Infomaniak mailbox UUID when using the Mail API backend"),
       attachment_index: z.number().int().min(0).describe("Zero-based attachment index from mail_read_message"),
       include_base64: z.boolean().optional().describe("Return base64 inline instead of saving to a temp file. Defaults to false."),
       max_inline_bytes: z.number().int().min(1).max(10 * 1024 * 1024).optional().describe("Maximum attachment size allowed for include_base64=true. Defaults to 1 MiB."),
     },
     readOnly,
-    async ({ folder, uid, attachment_index, include_base64, max_inline_bytes }) => {
-      const attachment = await mail.downloadAttachment(folder, uid, attachment_index);
+    async ({ folder, uid, mailbox_uuid, attachment_index, include_base64, max_inline_bytes }) => {
+      const attachment = await mail.downloadAttachment(folder, uid, attachment_index, mailbox_uuid);
       if (include_base64) {
         const maxInlineBytes = max_inline_bytes ?? DEFAULT_ATTACHMENT_INLINE_LIMIT;
         if (attachment.size > maxInlineBytes) {

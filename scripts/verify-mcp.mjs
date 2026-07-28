@@ -37,7 +37,7 @@ transport.stderr?.on("data", (chunk) => stderrChunks.push(String(chunk)));
 
 const client = new Client({
   name: "infomaniak-mcp-verifier",
-  version: "1.0.0",
+  version: "1.1.0",
 });
 
 try {

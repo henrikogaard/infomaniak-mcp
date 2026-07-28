@@ -114,7 +114,7 @@ Error handling is centralized through `safeHandler`. Tool handlers return `isErr
 
 ## Mail Routing
 
-Mail uses a hybrid router. The Mail API is preferred for fast metadata, query, draft, folder, spam, filter, and single-message mutation paths. IMAP/SMTP remains the compatibility fallback for attachment download/sending, draft attachments, full-body search, and unsupported API operations.
+Mail uses a hybrid router. The Mail API is preferred for fast metadata, query, attachment, draft, folder, spam, filter, and single-message mutation paths. IMAP/SMTP remains the compatibility fallback for full-body search and unsupported or failed API operations.
 
 ```mermaid
 flowchart TB

@@ -3,6 +3,9 @@ import { InfomaniakAPI } from "./infomaniak-api.js";
 
 interface ApiResponse<T = unknown> {
   data?: T;
+  cursor?: string;
+  has_more?: boolean;
+  response_at?: number;
 }
 
 interface FileEntry {
@@ -16,6 +19,24 @@ interface FileEntry {
   [key: string]: unknown;
 }
 
+export interface KDriveSearchOptions {
+  directoryId?: number;
+  depth?: "child" | "unlimited";
+}
+
+export interface KDriveCursorOptions {
+  cursor?: string;
+  limit?: number;
+  type?: string;
+}
+
+export interface KDrivePage {
+  items: FileEntry[];
+  cursor?: string;
+  hasMore?: boolean;
+  responseAt?: number;
+}
+
 export class KDriveService {
   private api: InfomaniakAPI;
   private driveId: string;
@@ -27,11 +48,13 @@ export class KDriveService {
     this.token = config.infomaniakToken;
   }
 
-  async searchFiles(query: string, limit = 20): Promise<FileEntry[]> {
-    const res = (await this.api.get(`/3/drive/${this.driveId}/files/search`, {
+  async searchFiles(query: string, limit = 20, options: KDriveSearchOptions = {}): Promise<FileEntry[]> {
+    const res = (await this.api.get(`/3/drive/${this.driveId}/files/search`, toQueryParams({
       query,
-      limit: String(limit),
-    })) as ApiResponse;
+      limit,
+      directory_id: options.directoryId,
+      depth: options.depth,
+    }))) as ApiResponse;
     return (res.data ?? []) as FileEntry[];
   }
 
@@ -41,6 +64,24 @@ export class KDriveService {
       `/3/drive/${this.driveId}/files/${id}/files`
     )) as ApiResponse;
     return (res.data ?? []) as FileEntry[];
+  }
+
+  async listFilesPage(folderId: string | number = "root", options: KDriveCursorOptions = {}): Promise<KDrivePage> {
+    const id = folderId === "root" ? 1 : folderId;
+    const res = (await this.api.get(
+      `/3/drive/${this.driveId}/files/${id}/files`,
+      toQueryParams({
+        cursor: options.cursor,
+        limit: options.limit,
+        "type[]": options.type,
+      })
+    )) as ApiResponse<FileEntry[]>;
+    return {
+      items: (res.data ?? []) as FileEntry[],
+      cursor: res.cursor,
+      hasMore: res.has_more,
+      responseAt: res.response_at,
+    };
   }
 
   async getFileMetadata(fileId: number): Promise<FileEntry> {
@@ -142,6 +183,30 @@ export class KDriveService {
 
   async deleteShareLink(fileId: number): Promise<void> {
     await this.api.delete(`/2/drive/${this.driveId}/files/${fileId}/link`);
+  }
+
+  async shareAccess(
+    fileId: number,
+    emails: string[],
+    right: string,
+    message?: string,
+    lang = "en"
+  ): Promise<unknown> {
+    const body: Record<string, unknown> = { emails, right };
+    if (message) body.message = message;
+    const res = (await this.api.post(
+      `/2/drive/${this.driveId}/files/${fileId}/access/invitations?lang=${encodeURIComponent(lang)}`,
+      body
+    )) as ApiResponse;
+    return res.data;
+  }
+
+  async listSharedWithMe(options: { type?: string } = {}): Promise<unknown> {
+    const res = (await this.api.get(
+      `/3/drive/${this.driveId}/files/shared_with_me`,
+      toQueryParams({ "type[]": options.type })
+    )) as ApiResponse;
+    return res.data;
   }
 
   async listShareLinks(options: ListShareLinksOptions = {}): Promise<unknown> {

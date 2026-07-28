@@ -153,7 +153,7 @@ async function createClient() {
 
   const client = new Client({
     name: "infomaniak-live-smoke",
-    version: "1.0.0",
+    version: "1.1.0",
   });
 
   client.onerror = (error) => {

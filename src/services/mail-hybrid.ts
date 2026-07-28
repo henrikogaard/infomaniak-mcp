@@ -127,10 +127,14 @@ export class HybridMailService implements MailToolService {
   async downloadAttachment(
     folder: string,
     uid: MailUid,
-    attachmentIndex: number
+    attachmentIndex: number,
+    mailboxUuid?: string
   ): Promise<MailAttachment & { contentBase64: string }> {
-    const legacy = this.requireLegacy("download attachments");
-    return legacy.downloadAttachment(folder, coerceLegacyUid(uid), attachmentIndex);
+    return this.withApiFallback(
+      "download attachments",
+      () => this.api?.downloadAttachment?.(folder, uid, attachmentIndex, mailboxUuid),
+      () => this.legacy?.downloadAttachment?.(folder, coerceLegacyUid(uid), attachmentIndex, mailboxUuid)
+    );
   }
 
   async searchMessages(
@@ -146,9 +150,10 @@ export class HybridMailService implements MailToolService {
   }
 
   async sendMessage(params: SendMessageParams): Promise<MailSendResult> {
-    if (params.attachments?.length) {
-      const legacy = this.requireLegacy("send mail with attachments");
-      return legacy.sendMessage(params);
+    if (params.attachments?.length && this.api?.sendMessage) {
+      // Do not retry an uncertain external send through SMTP: a lost API response
+      // could otherwise result in a duplicate message.
+      return this.api.sendMessage(params);
     }
 
     return this.withApiFallback(
@@ -159,10 +164,6 @@ export class HybridMailService implements MailToolService {
   }
 
   async saveDraft(params: MailSaveDraftParams): Promise<MailDraftResult> {
-    if (params.attachments?.length && this.legacy?.saveDraft) {
-      return this.legacy.saveDraft(params);
-    }
-
     return this.withApiFallback(
       "save draft",
       () => this.api?.saveDraft?.(params),

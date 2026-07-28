@@ -139,3 +139,66 @@ test("KDriveService exposes comments and file activity", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("KDriveService forwards scoped search and opaque directory cursors", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.includes("/files/search")) {
+      return jsonResponse({ result: "success", data: [{ id: 7, name: "report.pdf", type: "file" }] });
+    }
+    return jsonResponse({
+      result: "success",
+      data: [{ id: 8, name: "next.txt", type: "file" }],
+      cursor: "next-cursor",
+      has_more: true,
+      response_at: 123,
+    });
+  };
+
+  try {
+    const kdrive = new KDriveService(makeConfig());
+    const search = await kdrive.searchFiles("report", 10, { directoryId: 55, depth: "child" });
+    const page = await kdrive.listFilesPage(55, { limit: 25, cursor: "previous-cursor" });
+
+    assert.deepEqual(search, [{ id: 7, name: "report.pdf", type: "file" }]);
+    assert.deepEqual(page, {
+      items: [{ id: 8, name: "next.txt", type: "file" }],
+      cursor: "next-cursor",
+      hasMore: true,
+      responseAt: 123,
+    });
+    assert.equal(calls[0].url, "https://api.infomaniak.com/3/drive/42/files/search?query=report&limit=10&directory_id=55&depth=child");
+    assert.equal(calls[1].url, "https://api.infomaniak.com/3/drive/42/files/55/files?cursor=previous-cursor&limit=25");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("KDriveService supports invitations and files shared with the user", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    return jsonResponse({ result: "success", data: [{ id: 9, name: "Shared", type: "file" }] });
+  };
+
+  try {
+    const kdrive = new KDriveService(makeConfig());
+    await kdrive.shareAccess(123, ["ada@example.com"], "read", "Here is the file", "fr");
+    const shared = await kdrive.listSharedWithMe({ type: "file" });
+
+    assert.deepEqual(shared, [{ id: 9, name: "Shared", type: "file" }]);
+    assert.equal(calls[0].url, "https://api.infomaniak.com/2/drive/42/files/123/access/invitations?lang=fr");
+    assert.equal(calls[0].options.method, "POST");
+    assert.deepEqual(JSON.parse(calls[0].options.body), {
+      emails: ["ada@example.com"],
+      right: "read",
+      message: "Here is the file",
+    });
+    assert.equal(calls[1].url, "https://api.infomaniak.com/3/drive/42/files/shared_with_me?type%5B%5D=file");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
