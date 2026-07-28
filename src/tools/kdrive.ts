@@ -21,10 +21,10 @@ const kdriveItemArrayOutputSchema = {
 };
 const kdrivePageOutputSchema = {
   items: z.array(kdriveItemOutputSchema),
-  nextCursor: z.string().optional(),
-  hasMore: z.boolean().optional(),
-  responseAt: z.number().optional(),
-  total: z.number().optional(),
+  nextCursor: z.string().nullish(),
+  hasMore: z.boolean().nullish(),
+  responseAt: z.number().nullish(),
+  total: z.number().nullish(),
 };
 
 interface KDriveToolOptions {

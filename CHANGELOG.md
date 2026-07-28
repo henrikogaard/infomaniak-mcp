@@ -16,6 +16,9 @@ No changes yet.
 - Release: bumped package and MCP metadata to `1.1.0`
 - Docs: updated service counts, capabilities, and Mail/kDrive/kChat API coverage
 
+### Fixed
+- kDrive: allow null cursor metadata when a live page has no next cursor
+
 ## [1.0.0] - 2026-06-10
 
 ### Added
