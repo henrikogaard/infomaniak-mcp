@@ -108,11 +108,23 @@ interface RawMessage {
   html?: string;
   preview?: string;
   has_attachments?: boolean;
-  attachments?: Array<{ filename?: string; name?: string; content_type?: string; contentType?: string; size?: number }>;
+  attachments?: RawAttachment[];
   seen?: boolean;
   flagged?: boolean;
   folder?: unknown;
   headers?: unknown;
+}
+
+interface RawAttachment {
+  id?: string;
+  part_id?: string | number;
+  resource?: string;
+  filename?: string;
+  name?: string;
+  content_type?: string;
+  mime_type?: string;
+  contentType?: string;
+  size?: number;
 }
 
 interface RawSenderRestriction {
@@ -152,6 +164,7 @@ const DEFAULT_API_BASE = "https://mail.infomaniak.com/api";
 const MAIL_API_BATCH_LIMIT = 1000;
 const MAIL_QUERY_CURSOR_VERSION = 1;
 const DEFAULT_FOLDER_SCAN_CONCURRENCY = 4;
+const MAX_MAIL_API_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 export class MailApiService implements Partial<MailToolService> {
   readonly supportsMailboxes = true;
@@ -340,6 +353,43 @@ export class MailApiService implements Partial<MailToolService> {
       flagged: message.flagged,
       folder: message.folder,
       headers: includeHeaders ? message.headers : undefined,
+    };
+  }
+
+  async downloadAttachment(
+    folder: string,
+    uid: MailUid,
+    attachmentIndex: number,
+    mailboxUuid?: string
+  ): Promise<MailAttachment & { contentBase64: string }> {
+    const message = await this.readMessage(folder, uid, mailboxUuid, {
+      includeBody: false,
+      includeHeaders: false,
+      includeThreadContext: false,
+    });
+    const attachment = message.attachments[attachmentIndex];
+    if (!attachment) {
+      throw new Error(`Attachment index ${attachmentIndex} not found. Message has ${message.attachments.length} attachment(s).`);
+    }
+    if (!attachment.id) {
+      throw new Error(`Attachment index ${attachmentIndex} has no Mail API attachment ID.`);
+    }
+
+    const uuid = await this.resolveMailboxUuid(mailboxUuid);
+    const folderId = await this.resolveFolderId(uuid, folder);
+    const raw = await this.downloadRaw(
+      `/mail/${encodeURIComponent(uuid)}/folder/${encodeURIComponent(folderId)}/message/${encodeURIComponent(toApiMessageId(uid))}/attachment/${encodeURIComponent(attachment.id)}`
+    );
+    const filename = parseContentDispositionFilename(raw.headers.get("content-disposition")) ?? attachment.filename;
+    const contentType = (raw.headers.get("content-type") ?? attachment.contentType).split(";", 1)[0].trim();
+
+    return {
+      id: attachment.id,
+      filename,
+      contentType,
+      size: raw.bytes.length,
+      resource: attachment.resource,
+      contentBase64: Buffer.from(raw.bytes).toString("base64"),
     };
   }
 
@@ -583,16 +633,13 @@ export class MailApiService implements Partial<MailToolService> {
   }
 
   async sendMessage(params: SendMessageParams): Promise<MailSendResult> {
-    if (params.attachments?.length) {
-      throw new Error("Infomaniak Mail API attachment sending is not implemented yet; configure MAIL_USER and MAIL_PASSWORD to use SMTP fallback for attachments.");
-    }
-
     const { mailbox, draftPayload, draftUuid, draftUid } = await this.createDraft(params);
+    const preparedPayload = await this.prepareDraftPayload(mailbox, draftPayload, draftUuid, draftUid, params.attachments);
 
     const sendPayload = {
-      ...draftPayload,
+      ...preparedPayload,
       uuid: draftUuid,
-      uid: draftUid ?? null,
+      uid: preparedPayload.uid ?? draftUid ?? null,
       resource: `/api/mail/${mailbox.uuid}/draft/${draftUuid}`,
       action: "send",
     };
@@ -614,11 +661,8 @@ export class MailApiService implements Partial<MailToolService> {
   }
 
   async saveDraft(params: MailSaveDraftParams): Promise<MailDraftResult> {
-    if (params.attachments?.length) {
-      throw new Error("Infomaniak Mail API draft attachments are not implemented yet; configure MAIL_USER and MAIL_PASSWORD to save attachment drafts through IMAP.");
-    }
-
-    const { mailbox, draftUuid, draftUid } = await this.createDraft(params);
+    const { mailbox, draftPayload, draftUuid, draftUid } = await this.createDraft(params);
+    await this.prepareDraftPayload(mailbox, draftPayload, draftUuid, draftUid, params.attachments);
     return {
       mailboxUuid: mailbox.uuid,
       draftId: draftUuid,
@@ -644,8 +688,8 @@ export class MailApiService implements Partial<MailToolService> {
   async renameFolder(params: MailRenameFolderParams): Promise<MailFolder> {
     const mailbox = await this.resolveMailbox(params.mailboxUuid);
     const folderId = await this.resolveFolderId(mailbox.uuid, params.folder);
-    const response = await this.apiRequest<RawFolder>(`/mail/${encodeURIComponent(mailbox.uuid)}/folder/${encodeURIComponent(folderId)}`, {
-      method: "PUT",
+    const response = await this.apiRequest<RawFolder>(`/mail/${encodeURIComponent(mailbox.uuid)}/folder/${encodeURIComponent(folderId)}/rename`, {
+      method: "POST",
       body: JSON.stringify({ name: params.newName }),
     });
     this.invalidateMailboxCaches(mailbox.uuid);
@@ -917,6 +961,87 @@ export class MailApiService implements Partial<MailToolService> {
     };
   }
 
+  private async prepareDraftPayload(
+    mailbox: MailboxSummary,
+    draftPayload: Record<string, unknown>,
+    draftUuid: string,
+    draftUid: MailUid | undefined,
+    attachments?: SendMessageParams["attachments"]
+  ): Promise<Record<string, unknown> & { uuid: string; uid?: MailUid; attachments: string[] }> {
+    const attachmentUuids = attachments?.length
+      ? await Promise.all(attachments.map((attachment) => this.uploadDraftAttachment(mailbox.uuid, attachment)))
+      : [];
+    const payload = {
+      ...draftPayload,
+      uuid: draftUuid,
+      uid: draftUid ?? null,
+      resource: `/api/mail/${mailbox.uuid}/draft/${draftUuid}`,
+      action: "save",
+      attachments: attachmentUuids,
+    } as Record<string, unknown> & { uuid: string; uid?: MailUid; attachments: string[] };
+
+    if (attachmentUuids.length > 0) {
+      const response = await this.apiRequest<{ uid?: MailUid }>(
+        `/mail/${encodeURIComponent(mailbox.uuid)}/draft/${encodeURIComponent(draftUuid)}`,
+        { method: "PUT", body: JSON.stringify(payload) }
+      );
+      if (response.data?.uid !== undefined) payload.uid = response.data.uid;
+    }
+    return payload;
+  }
+
+  private async uploadDraftAttachment(mailboxUuid: string, attachment: NonNullable<SendMessageParams["attachments"]>[number]): Promise<string> {
+    if (/[\r\n]/.test(attachment.filename) || (attachment.contentType && /[\r\n]/.test(attachment.contentType))) {
+      throw new Error("Mail attachment filename and content type must not contain line breaks.");
+    }
+    const bytes = Buffer.from(attachment.base64Content, "base64");
+    if (bytes.length > MAX_MAIL_API_ATTACHMENT_BYTES) {
+      throw new Error(`Mail API attachment is too large (${bytes.length} bytes, max ${MAX_MAIL_API_ATTACHMENT_BYTES} bytes).`);
+    }
+    const response = await this.apiRequest<{ uuid?: string }>(
+      `/mail/${encodeURIComponent(mailboxUuid)}/draft/attachment`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": attachment.contentType ?? "application/octet-stream",
+          "x-ws-attachment-disposition": attachment.contentDisposition ?? "attachment",
+          "x-ws-attachment-filename": attachment.filename,
+          "x-ws-attachment-mime-type": attachment.contentType ?? "application/octet-stream",
+        },
+        body: new Uint8Array(bytes),
+      }
+    );
+    const uuid = response.data?.uuid;
+    if (!uuid) {
+      throw new Error(`Mail API attachment upload did not return an attachment UUID: ${JSON.stringify(response)}`);
+    }
+    return uuid;
+  }
+
+  private async downloadRaw(path: string): Promise<{ bytes: Uint8Array; headers: { get(name: string): string | null } }> {
+    const response = await this.http.fetch(`${this.baseUrl}${path}`, {
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        Accept: "*/*",
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`Infomaniak Mail API attachment request failed: ${response.status} ${response.statusText}\n${await response.text()}`);
+    }
+    const contentLength = Number(response.headers?.get("content-length") ?? "0");
+    if (contentLength > MAX_MAIL_API_ATTACHMENT_BYTES) {
+      throw new Error(`Mail API attachment is too large (${contentLength} bytes, max ${MAX_MAIL_API_ATTACHMENT_BYTES} bytes).`);
+    }
+    if (!response.arrayBuffer) {
+      throw new Error("Mail API attachment response did not expose binary content.");
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > MAX_MAIL_API_ATTACHMENT_BYTES) {
+      throw new Error(`Mail API attachment is too large (${bytes.byteLength} bytes, max ${MAX_MAIL_API_ATTACHMENT_BYTES} bytes).`);
+    }
+    return { bytes, headers: response.headers ?? { get: () => null } };
+  }
+
   private async apiRequest<T>(path: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
     const response = await this.http.fetch(`${this.baseUrl}${path}`, {
       ...options,
@@ -981,7 +1106,7 @@ function mapRawFolder(folder: RawFolder): MailFolder {
   return mapped;
 }
 
-function buildDraftPayload(mailbox: MailboxSummary, params: SendMessageParams) {
+function buildDraftPayload(mailbox: MailboxSummary, params: SendMessageParams): Record<string, unknown> {
   const htmlBody = params.html ?? toBasicHtml(params.text ?? "");
   return {
     uuid: null,
@@ -1257,10 +1382,25 @@ function formatAddress(address: RawAddress): string {
 
 function summarizeApiAttachments(message: RawMessage): MailAttachment[] {
   return (message.attachments ?? []).map((attachment) => ({
+    id: attachment.id ?? attachment.resource?.split("/").pop() ?? (attachment.part_id === undefined ? undefined : String(attachment.part_id)),
     filename: attachment.filename ?? attachment.name ?? "unnamed",
-    contentType: attachment.contentType ?? attachment.content_type ?? "application/octet-stream",
+    contentType: attachment.contentType ?? attachment.content_type ?? attachment.mime_type ?? "application/octet-stream",
     size: attachment.size ?? 0,
+    resource: attachment.resource,
   }));
+}
+
+function parseContentDispositionFilename(value: string | null): string | undefined {
+  if (!value) return undefined;
+  const encoded = value.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return encoded;
+    }
+  }
+  return value.match(/filename="?([^";]+)"?/i)?.[1]?.trim();
 }
 
 function toRecipient(email: string): { name: string; email: string } {

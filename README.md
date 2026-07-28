@@ -12,9 +12,9 @@ For tenant/account administration, use the admin-focused companion repo: [`infom
 
 The split is intentional. If a workflow changes settings for other users, domains, hosting, organization-wide mail security, or account-level governance, it belongs in `infomaniak-admin-mcp`, not this user MCP.
 
-## 1.0 Launch Status
+## 1.1 Release Status
 
-`@henrikogard/infomaniak-mcp` is versioned as `1.0.0` and the default advertised surface is the stable, user-scoped MCP server. Experimental Swiss Transfer tools are hidden unless `ENABLE_EXPERIMENTAL_SWISSTRANSFER=1` is set.
+`@henrikogard/infomaniak-mcp` is versioned as `1.1.0` and the default advertised surface is the stable, user-scoped MCP server. Experimental Swiss Transfer tools are hidden unless `ENABLE_EXPERIMENTAL_SWISSTRANSFER=1` is set.
 
 Launch-readiness docs:
 
@@ -28,14 +28,14 @@ Launch-readiness docs:
 
 | Service | Protocol | Tools | Description |
 |---------|----------|-------|-------------|
-| **kDrive** | REST API | 26 | Cloud storage — files plus share links, versions, trash restore, comments, recents, activity, and cursor-style pages |
+| **kDrive** | REST API | 28 | Cloud storage — files plus scoped search, real cursor pages, sharing invitations, shared-with-me, share links, versions, trash restore, comments, recents, and activity |
 | **Calendar** | REST API | 5 | Calendar management — list, create, update, delete events with recurrence and reminders |
 | **Tasks** | CalDAV | 8 | Task management — list, search, view, create, update, complete, delete VTODO tasks |
-| **Mail** | Mail API + IMAP/SMTP fallback | 26 | Email — query/list mailboxes, metadata-first reads, search, send, drafts, folder management, bulk cleanup, spam cleanup, filters, attachments, API-backed move/delete/flag |
+| **Mail** | Mail API + IMAP/SMTP fallback | 26 | Email — query/list mailboxes, metadata-first reads, search, send, native API attachments/draft attachments, folder management, bulk cleanup, spam cleanup, filters, and API-backed move/delete/flag |
 | **Contacts** | CardDAV | 8 | Address book — fast query, list, search, get, create, update, delete contacts with multiple emails/phones |
 | **AI Tools (Euria)** | REST API | 4 | Sovereign Swiss AI — chat, embeddings, audio transcription |
 | **Swiss Transfer** | REST API | 2 experimental | Encrypted file sharing up to 50 GB (disabled by default) |
-| **kChat** | REST API | 9 | Team chat — channels, posts, threads, reactions, users, and direct messages |
+| **kChat** | REST API | 11 | Team chat — channels, posts, threads, file upload/attachments, team search, reactions, users, and direct messages |
 | **kMeet** | REST API | 3 | Video conferencing room management |
 | **Chk** | REST API | 4 | URL shortener with QR codes and cursor-style pages |
 | **kPaste** | PrivateBin | 2 | Zero-knowledge encrypted secret sharing with confirmed local decrypt |
@@ -49,11 +49,11 @@ Launch-readiness docs:
 | kDrive | Yes | Yes | Files plus share links, versions, trash restore, comments, recents, and activity |
 | Calendar | Yes | Yes | Event CRUD via Infomaniak REST API, including RRULE recurrence and reminder offsets |
 | Tasks | Yes | Yes | VTODO CRUD via CalDAV |
-| Mail | Yes | Yes | API-backed query/list/read/search/send, drafts, folder management, sender bulk cleanup, spam cleanup, filters, and single-message move/delete/flag when `MAIL_TOKEN` or `INFOMANIAK_TOKEN` has `workspace:mail`; IMAP/SMTP fallback covers attachment download/sending, draft attachments, folder fallback, and full-body search |
+| Mail | Yes | Yes | API-backed query/list/read/search/send, attachment download/sending, drafts with attachments, folder management, sender bulk cleanup, spam cleanup, filters, and single-message move/delete/flag when `MAIL_TOKEN` or `INFOMANIAK_TOKEN` has `workspace:mail`; IMAP/SMTP remains a fallback |
 | Contacts | Yes | Yes | Contact CRUD via CardDAV with multiple email and phone fields |
 | AI Tools (Euria) | N/A | N/A | Stateless model calls: chat, embeddings, transcription |
 | Swiss Transfer | Partial | Partial | Experimental and disabled by default; send/info only |
-| kChat | Yes | Yes | Channel history, thread replies, posting, reactions, users, and DMs |
+| kChat | Yes | Yes | Channel history, thread replies, posting, file upload/attachments, team post search, reactions, users, and DMs |
 | kMeet | Limited | Yes | Create/schedule rooms; no list/update/delete room tools yet |
 | Chk | Yes | Yes | List/create/delete short URLs, including cursor-style read pages |
 | kPaste | Yes | Yes | Create encrypted pastes and read/decrypt paste URLs locally; reads require explicit acknowledgement because burn-after-reading pastes may be consumed |
@@ -64,15 +64,15 @@ Launch-readiness docs:
 
 | Area | Backend / protocol | Host | Auth | Used for |
 |------|--------------------|------|------|----------|
-| kDrive | Infomaniak REST API | `api.infomaniak.com` | Bearer `INFOMANIAK_TOKEN` + `KDRIVE_ID` | File operations, share links, versions, trash restore, comments, recents, activity |
+| kDrive | Infomaniak REST API | `api.infomaniak.com` | Bearer `INFOMANIAK_TOKEN` + `KDRIVE_ID` | File operations, scoped search, cursor pages, invitation sharing, shared-with-me, share links, versions, trash restore, comments, recents, activity |
 | Calendar | Infomaniak REST API | `api.infomaniak.com` | Bearer `INFOMANIAK_TOKEN` | Calendar list and event CRUD, including recurrence and reminder fields |
-| Mail API | Infomaniak Mail API | `mail.infomaniak.com/api` | Bearer `MAIL_TOKEN` with `workspace:mail` scope, or `INFOMANIAK_TOKEN` fallback | Mailboxes, folders, cursor-style summary query, metadata-first read, summary search, plain send, draft saving, folder create/rename/delete, sender bulk move-to-trash, spam settings, blocked senders, spam cleanup, filter listing, single-message move/delete/flag |
-| Mail fallback | IMAP + SMTP | `mail.infomaniak.com` | `MAIL_USER` + `MAIL_PASSWORD` | Attachment download/sending, draft saving with attachments, folder create/rename/delete fallback, full-body search fallback, reply threading, fallback move/delete/flag when Mail API is unavailable |
+| Mail API | Infomaniak Mail API | `mail.infomaniak.com/api` | Bearer `MAIL_TOKEN` with `workspace:mail` scope, or `INFOMANIAK_TOKEN` fallback | Mailboxes, folders, cursor-style summary query, metadata-first read, attachment download/sending, summary search, draft saving with attachments, folder create/rename/delete, sender bulk move-to-trash, spam settings, blocked senders, spam cleanup, filter listing, single-message move/delete/flag |
+| Mail fallback | IMAP + SMTP | `mail.infomaniak.com` | `MAIL_USER` + `MAIL_PASSWORD` | Fallback attachment download/sending, draft saving, full-body search, reply threading, and message actions when the Mail API is unavailable |
 | Contacts | CardDAV | `sync.infomaniak.com` | Basic auth with `DAV_USER` + `DAV_PASSWORD` | Address book and contact CRUD with multiple email/phone values |
 | Tasks | CalDAV VTODO | `sync.infomaniak.com` | Basic auth with `DAV_USER` + `DAV_PASSWORD` | Task list, search, view, create, update, complete/reopen, delete |
 | AI Tools (Euria) | OpenAI-compatible REST API | Infomaniak AI endpoint | Bearer `INFOMANIAK_TOKEN` + `AI_PRODUCT_ID` | Chat, embeddings, transcription |
 | Swiss Transfer | Swiss Transfer REST flow | `www.swisstransfer.com` | `INFOMANIAK_TOKEN` plus short-lived reCAPTCHA token | Experimental transfer creation/info |
-| kChat | kChat REST API | `{team}.kchat.infomaniak.com` | Bearer `KCHAT_TOKEN` + `KCHAT_TEAM_NAME` | Channels, posts, threads, reactions, users, DMs |
+| kChat | kChat REST API | `{team}.kchat.infomaniak.com` | Bearer `KCHAT_TOKEN` + `KCHAT_TEAM_NAME` | Channels, posts, threads, file upload/attachments, team search, reactions, users, DMs |
 | kMeet | Infomaniak REST API | `api.infomaniak.com` | Bearer `INFOMANIAK_TOKEN` | Room creation, scheduling, and room settings |
 | Chk | Infomaniak REST API | `api.infomaniak.com` | Bearer `INFOMANIAK_TOKEN` | Short URL create/list/delete |
 | kPaste | PrivateBin v2 protocol | `kpaste.infomaniak.com` | No account auth; client-side encryption key stays in URL fragment | Encrypted paste creation and confirmed local read/decrypt |
@@ -87,16 +87,16 @@ Launch-readiness docs:
 | `mail_query` | Mail API first, IMAP fallback; cursor-style summary query with filters |
 | `mail_read_message` | Mail API first, IMAP fallback |
 | `mail_send` without attachments | Mail API first, SMTP fallback |
-| `mail_send` with attachments | SMTP fallback |
+| `mail_send` with attachments | Mail API first, SMTP fallback |
 | `mail_save_draft` without attachments | Mail API first, IMAP Drafts append fallback |
-| `mail_save_draft` with attachments | IMAP Drafts append fallback |
+| `mail_save_draft` with attachments | Mail API first, IMAP Drafts append fallback |
 | `mail_create_folder` / `mail_rename_folder` / `mail_delete_folder` | Mail API first, IMAP fallback; delete requires exact confirmation |
 | `mail_search` | Mail API summary search first, IMAP full-body fallback |
 | `mail_find_by_sender` | Mail API only |
 | `mail_bulk_delete_preview` / `mail_bulk_delete_confirm` | Mail API only; confirm moves matching messages to Trash, never permanently purges |
 | `mail_mark_spam` / `mail_spam_settings` / `mail_set_spam_filter` / `mail_block_sender` / `mail_unblock_sender` / `mail_spam_cleanup_preview` / `mail_spam_cleanup_confirm` | Mail API only |
 | `mail_filters_list` | Mail API secured proxy to documented mailbox filter API |
-| `mail_download_attachment` | IMAP fallback; saves to a temp file by default, optional inline base64 for small attachments |
+| `mail_download_attachment` | Mail API first, IMAP fallback; saves to a temp file by default, optional inline base64 for small attachments |
 | `mail_move` / `mail_delete` / `mail_flag` | Mail API first, IMAP fallback |
 
 ### MCP Tool Discovery
@@ -191,7 +191,7 @@ Set `INFOMANIAK_PROFILE` when you want a named surface without hand-maintaining 
 
 Explicit `INFOMANIAK_SERVICES`, `INFOMANIAK_TOOLS`, `INFOMANIAK_DISABLED_TOOLS`, and `INFOMANIAK_READONLY` values still apply on top of the selected profile.
 
-Mail is the most dynamic area. With IMAP/SMTP only, the server advertises the basic mail tools plus fallback draft/folder operations. With Mail API credentials, it also advertises mailbox, draft, folder management, bulk sender cleanup, spam, and filter tools. Attachment download and sending messages with attachments still require the IMAP/SMTP fallback.
+Mail is the most dynamic area. With IMAP/SMTP only, the server advertises the basic mail tools plus fallback draft/folder operations. With Mail API credentials, it also advertises mailbox, native attachment, draft, folder management, bulk sender cleanup, spam, and filter tools. IMAP/SMTP remains a fallback for compatibility and full-body search.
 
 #### Prompts are separate from tools
 
@@ -473,6 +473,8 @@ Requires: `INFOMANIAK_TOKEN` + `KDRIVE_ID`
 | `kdrive_update_share_link` | Update share-link permissions, password, or expiry |
 | `kdrive_delete_share_link` | Remove a share link; requires exact confirmation |
 | `kdrive_list_share_links` | List files/folders that currently have share links |
+| `kdrive_share_access` | Invite users to a file/folder by email |
+| `kdrive_shared_with_me` | List files/folders shared with the current user |
 | `kdrive_list_versions` | List saved versions for a file |
 | `kdrive_restore_version` | Restore a previous version in place |
 | `kdrive_restore_version_to_folder` | Restore a previous version as a copy in another folder |
@@ -499,7 +501,7 @@ Requires: `INFOMANIAK_TOKEN`
 
 ### Mail
 
-Requires: `MAIL_TOKEN` with `workspace:mail` scope for API-backed mailbox/folder/message query, metadata reads, search, plain send, draft saving, folder management, sender cleanup, spam cleanup, filter listing, and single-message move/delete/flag. Also set `MAIL_USER` + `MAIL_PASSWORD` to enable IMAP/SMTP fallback tools for attachment download/sending, draft attachments, folder fallback, and full-body search.
+Requires: `MAIL_TOKEN` with `workspace:mail` scope for API-backed mailbox/folder/message query, metadata reads, attachment download/sending, search, draft saving with attachments, folder management, sender cleanup, spam cleanup, filter listing, and single-message move/delete/flag. Also set `MAIL_USER` + `MAIL_PASSWORD` for IMAP/SMTP fallback.
 
 `mail_query` uses the Mail API's message-list summaries with local filtering and anchored cursors. The public Infomaniak API reference currently documents mailbox search, but not a user-mailbox indexed message-search endpoint.
 
@@ -524,7 +526,7 @@ Requires: `MAIL_TOKEN` with `workspace:mail` scope for API-backed mailbox/folder
 | `mail_spam_cleanup_confirm` | Confirm a spam cleanup preview with token and exact phrase before blocking or marking messages |
 | `mail_filters_list` | List mailbox Sieve filters and scripts (read-only) |
 | `mail_send` | Send email with plain text/HTML, attachments, CC/BCC, and reply threading |
-| `mail_save_draft` | Save a draft without sending; supports attachments through IMAP Drafts fallback |
+| `mail_save_draft` | Save a draft without sending; supports Mail API attachments with IMAP Drafts fallback |
 | `mail_create_folder` | Create a mail folder, optionally under a parent folder |
 | `mail_rename_folder` | Rename a mail folder while preserving its parent path |
 | `mail_delete_folder` | Delete a mail folder; requires exact confirmation |
@@ -640,6 +642,8 @@ Requires: `KCHAT_TOKEN` + `KCHAT_TEAM_NAME`
 | `kchat_list_channels` | List public channels in the configured kChat team |
 | `kchat_post_message` | Post a message to a channel |
 | `kchat_reply_to_thread` | Reply to a message thread |
+| `kchat_upload_file` | Upload a file for use as a post attachment |
+| `kchat_search_posts` | Search posts across the configured team |
 | `kchat_add_reaction` | Add an emoji reaction to a post |
 | `kchat_get_channel_history` | Get recent posts from a channel |
 | `kchat_get_thread_replies` | Get replies in a thread |
@@ -984,7 +988,7 @@ Registered only when the backing service is also registered. These are read-only
 | `CARDDAV_URL` | — | Override CardDAV server (default: `https://sync.infomaniak.com`) |
 | `CALDAV_URL` | — | Override CalDAV server (default: `https://sync.infomaniak.com`) |
 
-> **Mail API vs IMAP/SMTP**: The Mail API is preferred for fast mailbox/folder/message query, metadata-first read, summary search, plain send, draft saving, folder management, sender cleanup, spam cleanup, filter listing, and single-message move/delete/flag. IMAP/SMTP remains useful for attachment download/sending, draft attachments, folder fallback, and full-body search fallback.
+> **Mail API vs IMAP/SMTP**: The Mail API is preferred for mailbox/folder/message query, metadata-first read, attachment download/sending, summary search, draft saving with attachments, folder management, sender cleanup, spam cleanup, filter listing, and single-message move/delete/flag. IMAP/SMTP remains useful as a fallback and for full-body search.
 
 > **CardDAV/CalDAV vs IMAP credentials**: Infomaniak uses **separate authentication** for sync protocols. CardDAV/CalDAV requires your short username (e.g. `abc12345`), while IMAP uses your full email address. If you have 2FA enabled, you **must** generate an app password at [manager.infomaniak.com](https://manager.infomaniak.com/v3/profile/application-password) for DAV access. If `DAV_USER`/`DAV_PASSWORD` are not set, they fall back to `MAIL_USER`/`MAIL_PASSWORD` (which likely won't work unless your email username happens to match).
 
@@ -1088,7 +1092,7 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for the detailed startup, dis
 | Service | Protocol | Why |
 |---------|----------|-----|
 | kDrive, Calendar, AI, Chk, kMeet | Infomaniak REST API | Official API available |
-| Mail | Infomaniak Mail API + IMAP/SMTP fallback | API covers mailbox/folder/message query, metadata-first read, summary search, plain send, drafts, folder management, sender cleanup, spam settings, filter listing, and single-message move/delete/flag; fallback fills attachment, draft-attachment, folder, and full-body-search gaps |
+| Mail | Infomaniak Mail API + IMAP/SMTP fallback | API covers mailbox/folder/message query, metadata-first read, attachment download/sending, summary search, drafts with attachments, folder management, sender cleanup, spam settings, filter listing, and single-message move/delete/flag; fallback remains available for compatibility and full-body search |
 | Contacts | CardDAV | No contacts REST API exists |
 | Tasks | CalDAV | Tasks are exposed as standard iCalendar VTODO objects |
 | Swiss Transfer | Swiss Transfer API | Dedicated transfer API (experimental) |
@@ -1113,7 +1117,7 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for the detailed startup, dis
 - **Calendar update/delete/recurrence/reminders**: These fields and endpoints are not fully covered by public official docs, but match the patterns used by Infomaniak's own tools
 - **Large files**: Downloads >50MB are blocked to prevent MCP protocol issues. Large downloads below that limit are saved to private temp files and returned as resource links instead of inline base64.
 - **Mobile**: MCP servers only work with desktop AI clients, not mobile apps
-- **Mail API coverage**: API-backed mail covers mailbox/folder/message listing, cursor-style querying, metadata-first reading, summary search, plain sending, draft saving without attachments, folder management, sender cleanup, spam cleanup, filter listing, and single-message move/delete/flag. Attachment download/sending, draft attachments, and full-body search still use IMAP/SMTP fallback.
+- **Mail API coverage**: API-backed mail covers mailbox/folder/message listing, cursor-style querying, metadata-first reading, attachment download/sending, summary search, draft saving with attachments, folder management, sender cleanup, spam cleanup, filter listing, and single-message move/delete/flag. IMAP/SMTP remains available as a fallback and for full-body search.
 - **kPaste read risk**: Reading a burn-after-reading paste can consume it for everyone. `kpaste_read` therefore requires the exact acknowledgement phrase even though the decrypt happens locally.
 - **IMAP fallback**: Each fallback mail operation opens a new connection. This is reliable but not optimized for rapid sequential operations.
 - **Mail smoke test**: The live smoke's "sent copy" check depends on your Sent folder updating quickly, so that specific verification can occasionally skip even when mail sending itself works.

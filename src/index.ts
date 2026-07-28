@@ -44,7 +44,7 @@ const toolFilter = createToolFilter({
 
 const server = new McpServer({
   name: "infomaniak-ksuite",
-  version: "1.0.0",
+  version: "1.1.0",
 });
 const toolRegistry = createToolRegistry();
 const toolServer = createToolFilteredServer(server, toolFilter, toolRegistry);

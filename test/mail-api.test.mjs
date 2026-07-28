@@ -18,6 +18,25 @@ function jsonResponse(body, ok = true, status = 200, statusText = "OK") {
   };
 }
 
+function binaryResponse(bytes, headers = {}) {
+  return {
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    headers: {
+      get(name) {
+        return headers[name.toLowerCase()] ?? "";
+      },
+    },
+    async arrayBuffer() {
+      return Uint8Array.from(bytes).buffer;
+    },
+    async text() {
+      return "";
+    },
+  };
+}
+
 test("MailApiService lists mailboxes with bearer-token API auth", async () => {
   const calls = [];
   const fetchImpl = async (url, options) => {
@@ -516,7 +535,7 @@ test("MailApiService saves drafts without sending and manages folders", async ()
         data: { id: "new-id", name: "Planning", role: "" },
       });
     }
-    if (url.endsWith("/mail/mailbox-1/folder/old-id") && options.method === "PUT") {
+    if (url.endsWith("/mail/mailbox-1/folder/old-id/rename") && options.method === "POST") {
       return jsonResponse({
         result: "success",
         data: { id: "old-id", name: "Archive 2026", role: "" },
@@ -558,6 +577,89 @@ test("MailApiService saves drafts without sending and manages folders", async ()
     name: "Planning",
     parent: "parent-id",
   });
+});
+
+test("MailApiService downloads attachments through the Mail API", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/mailbox?with=aliases,permissions,accountId,count_users")) {
+      return jsonResponse({ result: "success", data: [{ uuid: "mailbox-1", email: "user@example.com", mailbox: "user" }] });
+    }
+    if (url.endsWith("/mail/mailbox-1/folder?with=ik-static")) {
+      return jsonResponse({ result: "success", data: [{ id: "inbox-id", name: "INBOX", role: "INBOX", children: [] }] });
+    }
+    if (url.endsWith("/attachment/part-7")) {
+      return binaryResponse([104, 101, 108, 108, 111], {
+        "content-type": "text/plain",
+        "content-length": "5",
+        "content-disposition": 'attachment; filename="note.txt"',
+      });
+    }
+    if (url.includes("/mail/mailbox-1/folder/inbox-id/message/42")) {
+      return jsonResponse({
+        result: "success",
+        data: {
+          uid: "42@inbox-id",
+          attachments: [{ resource: "/api/mail/mailbox-1/folder/inbox-id/message/42@inbox-id/attachment/part-7", name: "note.txt", mime_type: "text/plain", size: 5 }],
+        },
+      });
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  };
+
+  const mail = new MailApiService({ token: "secret-token", fetch: fetchImpl });
+  const attachment = await mail.downloadAttachment("INBOX", "42@inbox-id", 0);
+
+  assert.deepEqual(attachment, {
+    id: "part-7",
+    filename: "note.txt",
+    contentType: "text/plain",
+    size: 5,
+    resource: "/api/mail/mailbox-1/folder/inbox-id/message/42@inbox-id/attachment/part-7",
+    contentBase64: "aGVsbG8=",
+  });
+  assert.equal(calls.at(-1).options.headers.Authorization, "Bearer secret-token");
+});
+
+test("MailApiService uploads draft attachments before saving and sending", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/mailbox?with=aliases,permissions,accountId,count_users")) {
+      return jsonResponse({
+        result: "success",
+        data: [{ uuid: "mailbox-1", email: "user@example.com", mailbox: "user", is_primary: true }],
+      });
+    }
+    if (url.endsWith("/mail/mailbox-1/draft") && options.method === "POST") {
+      return jsonResponse({ result: "success", data: { uuid: "draft-1", uid: "99@drafts-id" } });
+    }
+    if (url.endsWith("/mail/mailbox-1/draft/attachment") && options.method === "POST") {
+      return jsonResponse({ result: "success", data: { uuid: "attachment-1" } });
+    }
+    if (url.endsWith("/mail/mailbox-1/draft/draft-1") && options.method === "PUT") {
+      return jsonResponse({ result: "success", data: { uid: "99@drafts-id" } });
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  };
+
+  const mail = new MailApiService({ token: "secret-token", fetch: fetchImpl });
+  const draft = await mail.saveDraft({
+    mailboxUuid: "mailbox-1",
+    to: ["ada@example.com"],
+    subject: "Attached",
+    text: "See file",
+    attachments: [{ filename: "note.txt", base64Content: "SGVsbG8=", contentType: "text/plain" }],
+  });
+
+  assert.equal(draft.draftId, "draft-1");
+  const upload = calls.find((call) => call.url.endsWith("/draft/attachment"));
+  assert.equal(upload.options.headers["x-ws-attachment-filename"], "note.txt");
+  assert.equal(upload.options.headers["x-ws-attachment-mime-type"], "text/plain");
+  assert.deepEqual([...upload.options.body], [...Buffer.from("Hello")]);
+  const update = calls.find((call) => call.url.endsWith("/draft/draft-1") && call.options.method === "PUT");
+  assert.deepEqual(JSON.parse(update.options.body).attachments, ["attachment-1"]);
 });
 
 test("MailApiService scans all sender folders with bounded concurrency", async () => {
@@ -1097,7 +1199,7 @@ test("MailApiService lists mailbox filters through the secured proxy", async () 
   assert.equal(filters.filters[0].conditions[0].property, "from");
 });
 
-test("HybridMailService prefers API for supported reads and falls back for attachment sends", async () => {
+test("HybridMailService prefers the Mail API for attachment sends when supported", async () => {
   const apiCalls = [];
   const smtpCalls = [];
   const api = {
@@ -1127,7 +1229,7 @@ test("HybridMailService prefers API for supported reads and falls back for attac
   });
 
   assert.equal(listed.messages[0].subject, "API");
-  assert.deepEqual(apiCalls, [["listMessages", "Inbox", 10, 1]]);
-  assert.deepEqual(smtpCalls, [["sendMessage", 1]]);
-  assert.deepEqual(sent, { messageId: "smtp-message" });
+  assert.deepEqual(apiCalls, [["listMessages", "Inbox", 10, 1], ["sendMessage"]]);
+  assert.deepEqual(smtpCalls, []);
+  assert.deepEqual(sent, { messageId: "api-message" });
 });

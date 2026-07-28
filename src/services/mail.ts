@@ -7,9 +7,11 @@ import type { Config } from "../config.js";
 export type MailUid = number | string;
 
 export interface MailAttachment {
+  id?: string;
   filename: string;
   contentType: string;
   size: number;
+  resource?: string;
 }
 
 export interface SendAttachment {
@@ -303,7 +305,7 @@ export interface MailToolService {
   listMessages(folder?: string, limit?: number, page?: number, mailboxUuid?: string): Promise<MailListMessagesResult>;
   queryMessages?: (params: MailQueryParams) => Promise<MailQueryResult>;
   readMessage(folder: string, uid: MailUid, mailboxUuid?: string, options?: MailReadOptions): Promise<MailReadMessageResult>;
-  downloadAttachment(folder: string, uid: MailUid, attachmentIndex: number): Promise<MailAttachment & { contentBase64: string }>;
+  downloadAttachment(folder: string, uid: MailUid, attachmentIndex: number, mailboxUuid?: string): Promise<MailAttachment & { contentBase64: string }>;
   searchMessages(folder: string, query: string, limit?: number): Promise<Array<{ uid: MailUid; subject: string; from: string; date: string }>>;
   sendMessage(params: SendMessageParams): Promise<MailSendResult>;
   saveDraft?: (params: MailSaveDraftParams) => Promise<MailDraftResult>;
@@ -458,7 +460,8 @@ export class MailService {
   async downloadAttachment(
     folder: string,
     uid: number,
-    attachmentIndex: number
+    attachmentIndex: number,
+    _mailboxUuid?: string
   ): Promise<MailAttachment & { contentBase64: string }> {
     const parsed = await this.getParsedMessage(folder, uid);
     const attachments = parsed.attachments ?? [];

@@ -204,3 +204,44 @@ test("KChatService retries transient rate-limit responses through the shared HTT
   assert.equal(calls[0].url, "https://acme.kchat.infomaniak.com/api/v4/teams/name/acme");
   assert.equal(calls[1].url, "https://acme.kchat.infomaniak.com/api/v4/teams/name/acme");
 });
+
+test("KChatService uploads files, attaches them to posts, and searches team posts", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.includes("/api/v4/files?")) {
+      return jsonResponse({ file_infos: [{ id: "file-1", name: "note.txt" }] });
+    }
+    if (url.endsWith("/api/v4/teams/name/acme")) {
+      return jsonResponse({ id: "team-1", name: "acme" });
+    }
+    if (url.endsWith("/api/v4/teams/team-1/posts/search")) {
+      return jsonResponse({ order: ["post-1"], posts: { "post-1": { id: "post-1", message: "needle" } } });
+    }
+    return jsonResponse({ id: "post-1", file_ids: ["file-1"] });
+  };
+
+  const kchat = new KChatService({ token: "chat-token", teamName: "acme", fetch: fetchImpl });
+  const upload = await kchat.uploadFile("channel-1", "note.txt", Buffer.from("hello").toString("base64"), "text/plain");
+  const post = await kchat.postMessage("channel-1", "See attached", undefined, ["file-1"]);
+  const search = await kchat.searchPosts({ terms: "needle", page: 2, perPage: 10 });
+
+  assert.equal(upload.file_infos[0].id, "file-1");
+  assert.deepEqual(post.file_ids, ["file-1"]);
+  assert.deepEqual(search.order, ["post-1"]);
+  assert.equal(calls[0].url, "https://acme.kchat.infomaniak.com/api/v4/files?channel_id=channel-1&filename=note.txt");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.headers["Content-Type"], "text/plain");
+  assert.deepEqual([...calls[0].options.body], [...Buffer.from("hello")]);
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    channel_id: "channel-1",
+    message: "See attached",
+    file_ids: ["file-1"],
+  });
+  assert.deepEqual(JSON.parse(calls[3].options.body), {
+    terms: "needle",
+    is_or_search: false,
+    page: 2,
+    per_page: 10,
+  });
+});

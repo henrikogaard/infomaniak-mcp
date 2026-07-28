@@ -21,8 +21,10 @@ const kdriveItemArrayOutputSchema = {
 };
 const kdrivePageOutputSchema = {
   items: z.array(kdriveItemOutputSchema),
-  nextCursor: z.string().optional(),
-  total: z.number(),
+  nextCursor: z.string().nullish(),
+  hasMore: z.boolean().nullish(),
+  responseAt: z.number().nullish(),
+  total: z.number().nullish(),
 };
 
 interface KDriveToolOptions {
@@ -36,10 +38,15 @@ export function registerKDriveTools(server: McpServer, kdrive: KDriveService, op
     server,
     "kdrive_search",
     "Search for files in kDrive by name or content",
-    { query: z.string().describe("Search query"), limit: z.number().optional().describe("Max results (default 20)") },
+    {
+      query: z.string().describe("Search query"),
+      limit: z.number().optional().describe("Max results (default 20)"),
+      directory_id: z.number().optional().describe("Optional directory ID to scope the search"),
+      depth: z.enum(["child", "unlimited"]).optional().describe("Search only immediate children or recursively within directory_id"),
+    },
     readOnlyTool,
-    async ({ query, limit }) => {
-      const files = await kdrive.searchFiles(query, limit);
+    async ({ query, limit, directory_id, depth }) => {
+      const files = await kdrive.searchFiles(query, limit, { directoryId: directory_id, depth });
       return jsonResult(files);
     },
     kdriveItemArrayOutputSchema
@@ -69,6 +76,15 @@ export function registerKDriveTools(server: McpServer, kdrive: KDriveService, op
     },
     readOnlyTool,
     async ({ folder_id, limit, cursor }) => {
+      if (typeof (kdrive as KDriveService & { listFilesPage?: unknown }).listFilesPage === "function") {
+        const page = await kdrive.listFilesPage(folder_id ?? "root", { limit: limit ?? 100, cursor });
+        return structuredResult({
+          items: page.items,
+          nextCursor: page.cursor,
+          hasMore: page.hasMore,
+          responseAt: page.responseAt,
+        });
+      }
       const files = await kdrive.listFiles(folder_id ?? "root");
       return structuredResult(paginateArray(files, limit ?? 100, cursor));
     },
@@ -326,6 +342,24 @@ export function registerKDriveTools(server: McpServer, kdrive: KDriveService, op
 
   registerStructuredTool(
     server,
+    "kdrive_share_access",
+    "Invite users to access a kDrive file or folder by email",
+    {
+      file_id: z.number().describe("File or folder ID"),
+      emails: z.array(z.string().email()).min(1).describe("Recipient email addresses"),
+      right: z.enum(["manage", "read", "write"]).describe("Access level"),
+      message: z.string().optional().describe("Optional invitation message"),
+      lang: z.string().min(2).max(5).optional().describe("Invitation language, such as en or fr"),
+    },
+    mutatingTool,
+    async ({ file_id, emails, right, message, lang }) => {
+      return jsonResult(await kdrive.shareAccess(file_id, emails, right, message, lang));
+    },
+    objectOutputSchema
+  );
+
+  registerStructuredTool(
+    server,
     "kdrive_list_versions",
     "List saved versions for a kDrive file",
     {
@@ -538,6 +572,16 @@ export function registerKDriveTools(server: McpServer, kdrive: KDriveService, op
         type,
       }));
     },
+    kdriveItemArrayOutputSchema
+  );
+
+  registerStructuredTool(
+    server,
+    "kdrive_shared_with_me",
+    "List files and folders shared with the current user",
+    { type: z.enum(["dir", "file", "vault"]).optional().describe("Filter by item type") },
+    readOnlyTool,
+    async ({ type }) => jsonResult(await kdrive.listSharedWithMe(type ? { type } : undefined)),
     kdriveItemArrayOutputSchema
   );
 }

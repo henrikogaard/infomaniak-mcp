@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname } from "node:path";
+import { z } from "zod";
 
 import { registerCalendarTools } from "../dist/tools/calendar.js";
 import { registerChkTools } from "../dist/tools/chk.js";
@@ -386,6 +387,26 @@ test("page-oriented read tools return opaque cursors without changing legacy arr
   const chk = await server.tools.get("chk_list_short_urls_page").callback({ limit: 2 });
   assert.deepEqual(chk.structuredContent.items.map((item) => item.id), ["a", "b"]);
   assert.equal(chk.structuredContent.nextCursor, "2");
+});
+
+test("kDrive page output accepts a null cursor at the MCP wire boundary", async () => {
+  const server = createRecordingServer();
+
+  registerKDriveTools(server, {
+    async listFilesPage() {
+      return {
+        items: [{ id: 1, name: "A", type: "file" }],
+        hasMore: false,
+        responseAt: 123,
+      };
+    },
+  });
+
+  const result = await server.tools.get("kdrive_list_files_page").callback({ limit: 1 });
+  const outputSchema = z.object(server.tools.get("kdrive_list_files_page").config.outputSchema);
+  const wirePayload = { ...result.structuredContent, nextCursor: null };
+
+  assert.equal(outputSchema.safeParse(wirePayload).success, true);
 });
 
 test("kdrive_download_file saves large downloads and returns a resource link", async () => {
