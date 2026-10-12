@@ -449,6 +449,46 @@ test("HybridMailService searches through the Mail API before requiring IMAP fall
   ]);
 });
 
+test("HybridMailService forwards mailbox_uuid for move, delete, and flag", async () => {
+  const apiCalls = [];
+  const api = {
+    async moveMessage(...args) { apiCalls.push(["moveMessage", ...args]); },
+    async deleteMessage(...args) { apiCalls.push(["deleteMessage", ...args]); },
+    async flagMessage(...args) { apiCalls.push(["flagMessage", ...args]); },
+  };
+
+  const mail = new HybridMailService({ api });
+  await mail.moveMessage("INBOX", "42", "Archive", "mailbox-2");
+  await mail.deleteMessage("INBOX", "43", "mailbox-2");
+  await mail.flagMessage("INBOX", "44", ["\\Seen"], "add", "mailbox-2");
+
+  assert.deepEqual(apiCalls, [
+    ["moveMessage", "INBOX", "42", "Archive", "mailbox-2"],
+    ["deleteMessage", "INBOX", "43", "mailbox-2"],
+    ["flagMessage", "INBOX", "44", ["\\Seen"], "add", "mailbox-2"],
+  ]);
+});
+
+test("HybridMailService does not fall back to IMAP for a mailbox-scoped action", async () => {
+  const legacyCalls = [];
+  const api = {
+    async moveMessage() { throw new Error("Mail API down"); },
+  };
+  const legacy = {
+    async moveMessage(...args) { legacyCalls.push(args); },
+  };
+
+  const mail = new HybridMailService({ api, legacy });
+  await assert.rejects(
+    () => mail.moveMessage("INBOX", "42", "Archive", "mailbox-2"),
+    /via IMAP fallback/
+  );
+  assert.deepEqual(legacyCalls, []);
+
+  await mail.moveMessage("INBOX", "42", "Archive");
+  assert.deepEqual(legacyCalls, [["INBOX", 42, "Archive"]]);
+});
+
 test("MailApiService moves deletes and flags explicit messages through Mail API actions", async () => {
   const calls = [];
   const fetchImpl = async (url, options) => {
@@ -472,7 +512,7 @@ test("MailApiService moves deletes and flags explicit messages through Mail API 
     if (url.endsWith("/mail/mailbox-1/message/move")) {
       return jsonResponse({ result: "success", data: true });
     }
-    if (url.endsWith("/mail/mailbox-1/message/seen")) {
+    if (url.endsWith("/mail/mailbox-1/message/seen") || url.endsWith("/mail/mailbox-1/message/unseen")) {
       return jsonResponse({ result: "success", data: true });
     }
     if (url.endsWith("/mail/mailbox-1/message/star")) {
@@ -486,16 +526,23 @@ test("MailApiService moves deletes and flags explicit messages through Mail API 
   await mail.moveMessage("Inbox", "42@inbox-id", "Archive", "mailbox-1");
   await mail.deleteMessage("Inbox", "43@inbox-id", "mailbox-1");
   await mail.flagMessage("Inbox", "44@inbox-id", ["\\Seen", "\\Flagged"], "add", "mailbox-1");
+  // Bare UIDs, as returned by mail_query/mail_list_messages, are qualified with the source folder ID.
+  await mail.moveMessage("Inbox", "45", "Archive", "mailbox-1");
+  await mail.deleteMessage("Inbox", "46", "mailbox-1");
+  await mail.flagMessage("Inbox", 47, ["\\Seen"], "remove", "mailbox-1");
 
   const actionPayloads = calls
     .filter((call) => call.url.includes("/message/"))
     .map((call) => [call.url.split("/message/")[1], JSON.parse(call.options.body)]);
 
   assert.deepEqual(actionPayloads, [
-    ["move", { uids: ["42"], to: "archive-id" }],
-    ["move", { uids: ["43"], to: "trash-id" }],
-    ["seen", { uids: ["44"] }],
-    ["star", { uids: ["44"] }],
+    ["move", { uids: ["42@inbox-id"], to: "archive-id" }],
+    ["move", { uids: ["43@inbox-id"], to: "trash-id" }],
+    ["seen", { uids: ["44@inbox-id"] }],
+    ["star", { uids: ["44@inbox-id"] }],
+    ["move", { uids: ["45@inbox-id"], to: "archive-id" }],
+    ["move", { uids: ["46@inbox-id"], to: "trash-id" }],
+    ["unseen", { uids: ["47@inbox-id"] }],
   ]);
 });
 
@@ -974,7 +1021,7 @@ test("MailApiService previews and confirms bulk delete by moving matching sender
     }
     if (url.endsWith("/mail/mailbox-1/message/move")) {
       const payload = JSON.parse(options.body);
-      assert.deepEqual(payload, { uids: ["1", "2"], to: "trash-id" });
+      assert.deepEqual(payload, { uids: ["1@inbox-id", "2@inbox-id"], to: "trash-id" });
       return jsonResponse({ result: "success", data: { undo_resource: "/undo/1" } });
     }
     throw new Error(`Unexpected URL ${url}`);
@@ -998,7 +1045,7 @@ test("MailApiService previews and confirms bulk delete by moving matching sender
 
   assert.equal(result.movedCount, 2);
   assert.equal(result.targetFolderPath, "Trash");
-  assert.deepEqual(result.uids, ["1", "2"]);
+  assert.deepEqual(result.uids, ["1@inbox-id", "2@inbox-id"]);
 });
 
 test("MailApiService rejects stale bulk delete confirmations", async () => {
@@ -1145,20 +1192,37 @@ test("MailApiService marks explicit messages as spam with confirmation", async (
     }
     if (url.endsWith("/mail/mailbox-1/message/spam")) {
       const payload = JSON.parse(options.body);
-      assert.deepEqual(payload, { uids: ["1", "2"] });
+      assert.deepEqual(payload, { uids: ["1@inbox-id", "2@inbox-id"] });
       return jsonResponse({ result: "success", data: { undo_resource: "/undo/spam" } });
+    }
+    if (url.endsWith("/mail/mailbox-1/folder?with=ik-static")) {
+      return jsonResponse({
+        result: "success",
+        data: [{ id: "inbox-id", name: "Inbox", role: "inbox", children: [] }],
+      });
     }
     throw new Error(`Unexpected URL ${url}`);
   };
 
   const mail = new MailApiService({ token: "secret-token", fetch: fetchImpl });
-  const result = await mail.markMessagesAsSpam({
-    uids: ["1", "2"],
+  const qualified = await mail.markMessagesAsSpam({
+    uids: ["1@inbox-id", "2@inbox-id"],
     confirmation: "MARK 2 MESSAGES AS SPAM",
   });
+  assert.equal(qualified.markedCount, 2);
+  assert.deepEqual(qualified.uids, ["1@inbox-id", "2@inbox-id"]);
 
-  assert.equal(result.markedCount, 2);
-  assert.deepEqual(result.uids, ["1", "2"]);
+  const bareWithFolder = await mail.markMessagesAsSpam({
+    uids: ["1", "2"],
+    folder: "Inbox",
+    confirmation: "MARK 2 MESSAGES AS SPAM",
+  });
+  assert.deepEqual(bareWithFolder.uids, ["1@inbox-id", "2@inbox-id"]);
+
+  await assert.rejects(
+    () => mail.markMessagesAsSpam({ uids: ["1"], confirmation: "MARK 1 MESSAGES AS SPAM" }),
+    /need the source folder/
+  );
 });
 
 test("MailApiService lists mailbox filters through the secured proxy", async () => {

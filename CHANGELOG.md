@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-No changes yet.
+### Fixed
+- Mail: message actions (move, delete, flag, mark as spam, bulk delete, spam cleanup) now send fully qualified `uid@folderId` IDs; the Mail API rejected bare UIDs with `message__uid_is_not_valid`
+- Mail: `mail_move`, `mail_delete`, and `mail_flag` now honour `mailbox_uuid` instead of always acting on the primary mailbox, and no longer fall back to the single-account IMAP backend for mailbox-scoped requests
+- Mail: `mail_mark_spam` accepts an optional `folder` for bare UIDs
 
 ## [1.1.0] - 2026-07-28
 

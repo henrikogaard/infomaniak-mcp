@@ -371,11 +371,12 @@ export function registerMailTools(server: McpServer, mail: MailToolService, opti
       "Mark explicit message UIDs as spam through the Infomaniak Mail API. Requires exact confirmation: MARK N MESSAGES AS SPAM.",
       {
         uids: z.array(uidSchema).min(1).describe("Message UIDs to mark as spam"),
+        folder: z.string().optional().describe("Folder containing the messages (e.g. INBOX). Required unless UIDs are already in uid@folderId form."),
         confirmation: z.string().describe("Exact confirmation phrase, e.g. MARK 2 MESSAGES AS SPAM"),
         mailbox_uuid: z.string().optional().describe("Optional Infomaniak mailbox UUID when using the Mail API backend"),
       },
       destructive,
-      async ({ uids, confirmation, mailbox_uuid }) => jsonResult(await mail.markMessagesAsSpam!({ uids, confirmation, mailboxUuid: mailbox_uuid }))
+      async ({ uids, folder, confirmation, mailbox_uuid }) => jsonResult(await mail.markMessagesAsSpam!({ uids, folder, confirmation, mailboxUuid: mailbox_uuid }))
     );
 
     if (mail.findMessagesBySender) {
@@ -702,7 +703,7 @@ async function confirmSpamCleanup(mail: MailToolService, args: SpamCleanupConfir
   }
 
   const uids = preview.markExisting
-    ? preview.messages.map((message) => message.uid)
+    ? preview.messages.map((message) => String(message.uid).includes("@") ? message.uid : `${message.uid}@${message.folderId}`)
     : [];
   const spamResult = uids.length > 0
     ? await mail.markMessagesAsSpam({

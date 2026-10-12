@@ -513,7 +513,7 @@ export class MailApiService implements Partial<MailToolService> {
       throw new Error(`Bulk delete confirmation must exactly equal: ${preview.confirmationPhrase}`);
     }
 
-    const uids = preview.messages.map((message) => String(message.uid));
+    const uids = preview.messages.map((message) => toApiActionUid(message.uid, message.folderId));
     await this.postMessageAction(preview.mailboxUuid, "move", { uids, to: preview.targetFolderId });
     this.invalidateMailboxCaches(preview.mailboxUuid);
 
@@ -531,7 +531,14 @@ export class MailApiService implements Partial<MailToolService> {
 
   async markMessagesAsSpam(params: MailMarkSpamParams): Promise<MailMarkSpamResult> {
     const mailbox = await this.resolveMailbox(params.mailboxUuid);
-    const uids = uniqueValues(params.uids.map((uid) => toApiMessageId(uid)));
+    const spamFolderId = params.folder ? await this.resolveFolderId(mailbox.uuid, params.folder) : undefined;
+    const uids = uniqueValues(params.uids.map((uid) => {
+      if (String(uid).includes("@")) return String(uid);
+      if (!spamFolderId) {
+        throw new Error("Mail API spam actions need the source folder. Pass folder (e.g. INBOX) or full UIDs in uid@folderId form.");
+      }
+      return toApiActionUid(uid, spamFolderId);
+    }));
     if (uids.length === 0) {
       throw new Error("At least one message UID is required.");
     }
@@ -711,33 +718,36 @@ export class MailApiService implements Partial<MailToolService> {
 
   async moveMessage(folder: string, uid: MailUid, destinationFolder: string, mailboxUuid?: string): Promise<void> {
     const mailbox = await this.resolveMailbox(mailboxUuid);
+    const sourceFolderId = await this.resolveFolderId(mailbox.uuid, folder);
     const destinationFolderId = await this.resolveFolderId(mailbox.uuid, destinationFolder);
     await this.postMessageAction(mailbox.uuid, "move", {
-      uids: [toApiMessageId(uid)],
+      uids: [toApiActionUid(uid, sourceFolderId)],
       to: destinationFolderId,
     });
     this.invalidateMailboxCaches(mailbox.uuid);
   }
 
-  async deleteMessage(_folder: string, uid: MailUid, mailboxUuid?: string): Promise<void> {
+  async deleteMessage(folder: string, uid: MailUid, mailboxUuid?: string): Promise<void> {
     const mailbox = await this.resolveMailbox(mailboxUuid);
+    const sourceFolderId = await this.resolveFolderId(mailbox.uuid, folder);
     const trashFolder = await this.resolveTrashFolder(mailbox.uuid);
     await this.postMessageAction(mailbox.uuid, "move", {
-      uids: [toApiMessageId(uid)],
+      uids: [toApiActionUid(uid, sourceFolderId)],
       to: trashFolder.id,
     });
     this.invalidateMailboxCaches(mailbox.uuid);
   }
 
   async flagMessage(
-    _folder: string,
+    folder: string,
     uid: MailUid,
     flags: string[],
     action: "add" | "remove",
     mailboxUuid?: string
   ): Promise<void> {
     const mailbox = await this.resolveMailbox(mailboxUuid);
-    const uids = [toApiMessageId(uid)];
+    const sourceFolderId = await this.resolveFolderId(mailbox.uuid, folder);
+    const uids = [toApiActionUid(uid, sourceFolderId)];
     const messageActions = flags.map((flag) => {
       const apiAction = apiFlagAction(flag, action);
       if (!apiAction) {
@@ -1409,6 +1419,13 @@ function toRecipient(email: string): { name: string; email: string } {
 
 function toApiMessageId(uid: MailUid): string {
   return String(uid).split("@", 1)[0];
+}
+
+// Message actions (move/seen/star/spam) are posted to /mail/{uuid}/message/{action}
+// without a folder in the path, so the API expects fully qualified "uid@folderId" IDs.
+function toApiActionUid(uid: MailUid, folderId: string): string {
+  const value = String(uid);
+  return value.includes("@") ? value : `${value}@${folderId}`;
 }
 
 function requireMailboxHosting(mailbox: MailboxSummary): MailboxSummary & { hostingId: number; mailbox: string } {

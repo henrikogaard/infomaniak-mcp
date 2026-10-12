@@ -195,33 +195,36 @@ export class HybridMailService implements MailToolService {
     );
   }
 
-  async moveMessage(folder: string, uid: MailUid, destinationFolder: string): Promise<void> {
+  async moveMessage(folder: string, uid: MailUid, destinationFolder: string, mailboxUuid?: string): Promise<void> {
     return this.withApiFallback(
       "move messages",
-      () => this.api?.moveMessage?.(folder, uid, destinationFolder),
+      () => this.api?.moveMessage?.(folder, uid, destinationFolder, mailboxUuid),
       async () => {
+        rejectMailboxScopedLegacy("move messages", mailboxUuid);
         const legacy = this.requireLegacy("move messages");
         await legacy.moveMessage(folder, coerceLegacyUid(uid), destinationFolder);
       }
     );
   }
 
-  async deleteMessage(folder: string, uid: MailUid): Promise<void> {
+  async deleteMessage(folder: string, uid: MailUid, mailboxUuid?: string): Promise<void> {
     return this.withApiFallback(
       "delete messages",
-      () => this.api?.deleteMessage?.(folder, uid),
+      () => this.api?.deleteMessage?.(folder, uid, mailboxUuid),
       async () => {
+        rejectMailboxScopedLegacy("delete messages", mailboxUuid);
         const legacy = this.requireLegacy("delete messages");
         await legacy.deleteMessage(folder, coerceLegacyUid(uid));
       }
     );
   }
 
-  async flagMessage(folder: string, uid: MailUid, flags: string[], action: "add" | "remove"): Promise<void> {
+  async flagMessage(folder: string, uid: MailUid, flags: string[], action: "add" | "remove", mailboxUuid?: string): Promise<void> {
     return this.withApiFallback(
       "flag messages",
-      () => this.api?.flagMessage?.(folder, uid, flags, action),
+      () => this.api?.flagMessage?.(folder, uid, flags, action, mailboxUuid),
       async () => {
+        rejectMailboxScopedLegacy("flag messages", mailboxUuid);
         const legacy = this.requireLegacy("flag messages");
         await legacy.flagMessage(folder, coerceLegacyUid(uid), flags, action);
       }
@@ -323,4 +326,12 @@ function coerceLegacyUid(uid: MailUid): number {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+// IMAP/SMTP fallback only knows the single MAIL_USER account, so it must never act
+// on a request that targeted a specific Mail API mailbox.
+function rejectMailboxScopedLegacy(operation: string, mailboxUuid?: string): void {
+  if (mailboxUuid) {
+    throw new Error(`Cannot ${operation} for mailbox ${mailboxUuid} via IMAP fallback; the Mail API call failed.`);
+  }
 }
