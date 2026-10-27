@@ -7,7 +7,8 @@
 - Mail: `mail_move`, `mail_delete`, and `mail_flag` now honour `mailbox_uuid` instead of always acting on the primary mailbox
 - Mail: when the Mail API fails for a request scoped to a mailbox other than `MAIL_USER`, no tool falls back to the single-account IMAP/SMTP backend anymore (previously reads, listings, drafts and folder changes could hit the wrong mailbox); the Mail API error is returned instead of a generic fallback message
 - Mail: `mail_mark_spam` accepts an optional `folder` for bare UIDs; blank UIDs are ignored
-- Mail: a `uid@folderId` UID now selects its own folder consistently for reads, attachments and actions, and listings keep the folder suffix for threads whose first message lives in another folder
+- Mail: a `uid@folderId` UID now selects its own folder consistently for reads, attachments and actions; listings represent each thread by a message in the listed folder (not the user's own copy in Sent) and keep the folder suffix only when the thread has no message there
+- Mail: the IMAP/SMTP fallback no longer stands in when the Mail API's default mailbox is not `MAIL_USER`, or for a Mail API query cursor
 - Mail: message actions reject unknown source or destination folders with a clear error instead of sending the raw name to the API, and skip folder lookups for already qualified UIDs
 
 ## [1.1.0] - 2026-07-28

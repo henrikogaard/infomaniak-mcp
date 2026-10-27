@@ -704,7 +704,7 @@ async function confirmSpamCleanup(mail: MailToolService, args: SpamCleanupConfir
   }
 
   const uids = preview.markExisting
-    ? preview.messages.map((message) => qualifyMailUid(message.uid, message.folderId))
+    ? [...new Set(preview.messages.map((message) => qualifyMailUid(message.uid, message.folderId)))]
     : [];
   const spamResult = uids.length > 0
     ? await mail.markMessagesAsSpam({

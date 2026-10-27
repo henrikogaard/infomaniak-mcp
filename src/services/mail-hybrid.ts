@@ -98,6 +98,9 @@ export class HybridMailService implements MailToolService {
       "query messages",
       () => this.api?.queryMessages?.(params),
       async () => {
+        if (params.cursor) {
+          throw new Error("IMAP fallback cannot continue a Mail API query cursor.");
+        }
         const legacy = this.requireLegacy("query messages");
         const folder = params.folder ?? "INBOX";
         const limit = params.limit ?? 20;
@@ -304,7 +307,7 @@ export class HybridMailService implements MailToolService {
         if (!this.legacy) throw error;
         if (!(await this.legacyServesMailbox(mailboxUuid))) {
           throw new Error(
-            `Mail API failed to ${operation} for mailbox ${mailboxUuid}: ${formatError(error)} ` +
+            `Mail API failed to ${operation} for mailbox ${mailboxUuid ?? "(default)"}: ${formatError(error)} ` +
             "(IMAP/SMTP fallback skipped: it only serves the MAIL_USER mailbox)."
           );
         }
@@ -325,16 +328,23 @@ export class HybridMailService implements MailToolService {
   }
 
   // The IMAP/SMTP fallback only knows the MAIL_USER account, so it may only stand in for
-  // the Mail API when the request is not scoped to a different mailbox.
+  // the Mail API when the request targets that mailbox. Without a mailbox UUID the API
+  // acts on its default mailbox; if the mailbox list is unavailable (e.g. the API is
+  // down) the fallback is still allowed, matching the pre-Mail-API behaviour.
   private async legacyServesMailbox(mailboxUuid?: string): Promise<boolean> {
-    if (!mailboxUuid || mailboxUuid === "legacy") return true;
-    if (!this.legacyEmail || !this.api?.listMailboxes) return false;
+    if (mailboxUuid === "legacy") return true;
+    if (!this.legacyEmail || !this.api?.listMailboxes) return !mailboxUuid;
+    let mailboxes: MailboxSummary[];
     try {
-      const mailbox = (await this.api.listMailboxes()).find((candidate) => candidate.uuid === mailboxUuid);
-      return mailbox?.email.toLowerCase() === this.legacyEmail.toLowerCase();
+      mailboxes = await this.api.listMailboxes();
     } catch {
-      return false;
+      return !mailboxUuid;
     }
+    const mailbox = mailboxUuid
+      ? mailboxes.find((candidate) => candidate.uuid === mailboxUuid)
+      : mailboxes.find((candidate) => candidate.isPrimary) ?? mailboxes[0];
+    if (!mailbox) return !mailboxUuid;
+    return mailbox.email?.toLowerCase() === this.legacyEmail.toLowerCase();
   }
 
   private requireLegacy(operation: string): Required<Pick<

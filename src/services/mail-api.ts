@@ -512,7 +512,7 @@ export class MailApiService implements Partial<MailToolService> {
       throw new Error(`Bulk delete confirmation must exactly equal: ${preview.confirmationPhrase}`);
     }
 
-    const uids = preview.messages.map((message) => qualifyMailUid(message.uid, message.folderId));
+    const uids = uniqueValues(preview.messages.map((message) => qualifyMailUid(message.uid, message.folderId)));
     await this.postMessageAction(preview.mailboxUuid, "move", { uids, to: preview.targetFolderId });
     this.invalidateMailboxCaches(preview.mailboxUuid);
 
@@ -1263,7 +1263,10 @@ function flattenFolders(folders: RawFolder[], prefix = ""): MailFolder[] {
 }
 
 function mapThread(thread: RawThread, folderId: string): MailMessageSummary {
-  const firstMessage = thread.messages?.[0];
+  // Threads can include messages stored in other folders (e.g. the user's own copy in
+  // Sent); represent the thread by a message that lives in the listed folder.
+  const firstMessage = thread.messages?.find((candidate) => splitMailUid(candidate.uid ?? "").folderId === folderId)
+    ?? thread.messages?.[0];
   const message: MailMessageSummary = {
     uid: listingUid(firstMessage?.uid ?? thread.uid ?? "", folderId),
     subject: thread.subject ?? "(no subject)",
@@ -1434,8 +1437,8 @@ function toRecipient(email: string): { name: string; email: string } {
   return { name: "", email: email.trim() };
 }
 
-// Threads can include messages stored in another folder (e.g. a reply in Sent). Keep the
-// folder suffix in that case so reads and actions target that message, not the listing folder.
+// Keep the folder suffix only for a message outside the listed folder, so reads and
+// actions target that message rather than the same UID in the listed folder.
 function listingUid(uid: MailUid, folderId: string): string {
   const parts = splitMailUid(uid);
   return parts.folderId && parts.folderId !== folderId ? String(uid).trim() : parts.uid;

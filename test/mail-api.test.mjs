@@ -503,6 +503,36 @@ test("HybridMailService does not fall back to IMAP for a mailbox-scoped action",
   ]);
 });
 
+test("HybridMailService only falls back without a mailbox UUID when the default mailbox is MAIL_USER", async () => {
+  const legacyCalls = [];
+  const api = {
+    async listMailboxes() {
+      return [
+        { uuid: "mailbox-1", email: "alias@example.com", mailbox: "alias" },
+        { uuid: "mailbox-2", email: "boss@example.com", mailbox: "boss", isPrimary: true },
+      ];
+    },
+    async deleteMessage() { throw new Error("Mail API down"); },
+    async queryMessages() { throw new Error("Mail API down"); },
+  };
+  const legacy = {
+    async deleteMessage(...args) { legacyCalls.push(["deleteMessage", ...args]); },
+    async listMessages(...args) { legacyCalls.push(["listMessages", ...args]); return { messages: [], total: 0 }; },
+  };
+
+  const mail = new HybridMailService({ api, legacy, legacyEmail: "alias@example.com" });
+  await assert.rejects(
+    () => mail.deleteMessage("INBOX", "42"),
+    /Mail API failed to delete messages for mailbox \(default\): Mail API down/
+  );
+  // IMAP cannot continue a Mail API cursor, so paging never silently restarts in another mailbox.
+  await assert.rejects(
+    () => mail.queryMessages({ mailboxUuid: "mailbox-1", cursor: "opaque" }),
+    /IMAP fallback cannot continue a Mail API query cursor/
+  );
+  assert.deepEqual(legacyCalls, []);
+});
+
 test("HybridMailService uses IMAP for mailbox-scoped calls when no Mail API is configured", async () => {
   const legacyCalls = [];
   const legacy = {
@@ -648,7 +678,7 @@ test("MailApiService resolves message folders consistently for reads and actions
   assert.equal(calls.filter((call) => call.options.method === "POST").length, 2);
 });
 
-test("MailApiService keeps the folder suffix for threads whose first message lives elsewhere", async () => {
+test("MailApiService represents threads by a message in the listed folder", async () => {
   const fetchImpl = async (url) => {
     if (url.endsWith("/mailbox?with=aliases,permissions,accountId,count_users")) {
       return jsonResponse({
@@ -669,7 +699,8 @@ test("MailApiService keeps the folder suffix for threads whose first message liv
           count: 2,
           threads: [
             { uid: "thread-1", subject: "Local", messages: [{ uid: "1@inbox-id" }] },
-            { uid: "thread-2", subject: "Cross-folder", messages: [{ uid: "777@sent-id" }] },
+            { uid: "thread-2", subject: "Reply", messages: [{ uid: "12@sent-id", preview: "Mine" }, { uid: "13@inbox-id", preview: "Theirs" }] },
+            { uid: "thread-3", subject: "Cross-folder", messages: [{ uid: "777@sent-id" }] },
           ],
         },
       });
@@ -679,7 +710,8 @@ test("MailApiService keeps the folder suffix for threads whose first message liv
 
   const mail = new MailApiService({ token: "secret-token", fetch: fetchImpl });
   const result = await mail.listMessages("INBOX", 20, 1, "mailbox-1");
-  assert.deepEqual(result.messages.map((message) => message.uid), ["1", "777@sent-id"]);
+  assert.deepEqual(result.messages.map((message) => message.uid), ["1", "13", "777@sent-id"]);
+  assert.equal(result.messages[1].preview, "Theirs");
 });
 
 test("MailApiService saves drafts without sending and manages folders", async () => {
