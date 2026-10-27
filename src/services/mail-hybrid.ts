@@ -32,6 +32,8 @@ import type {
 interface HybridMailServiceOptions {
   api?: Partial<MailToolService>;
   legacy?: Partial<MailToolService>;
+  /** MAIL_USER address served by the IMAP/SMTP fallback. */
+  legacyEmail?: string;
 }
 
 export class HybridMailService implements MailToolService {
@@ -44,10 +46,12 @@ export class HybridMailService implements MailToolService {
 
   private readonly api?: Partial<MailToolService>;
   private readonly legacy?: Partial<MailToolService>;
+  private readonly legacyEmail?: string;
 
   constructor(options: HybridMailServiceOptions) {
     this.api = options.api;
     this.legacy = options.legacy;
+    this.legacyEmail = options.legacyEmail;
     this.supportsMailboxes = Boolean(options.api?.listMailboxes);
     this.supportsBulkMailActions = Boolean(options.api?.findMessagesBySender && options.api?.previewBulkDeleteBySender && options.api?.confirmBulkDeleteBySender);
     this.supportsSpamControls = Boolean(options.api?.getSpamSettings && options.api?.blockSender && options.api?.markMessagesAsSpam);
@@ -70,7 +74,8 @@ export class HybridMailService implements MailToolService {
     return this.withApiFallback(
       "list folders",
       () => this.api?.listFolders?.(mailboxUuid),
-      () => this.legacy?.listFolders?.(mailboxUuid)
+      () => this.legacy?.listFolders?.(mailboxUuid),
+      mailboxUuid
     );
   }
 
@@ -83,7 +88,8 @@ export class HybridMailService implements MailToolService {
     return this.withApiFallback(
       "list messages",
       () => this.api?.listMessages?.(folder, limit, page, mailboxUuid),
-      () => this.legacy?.listMessages?.(folder, limit, page, mailboxUuid)
+      () => this.legacy?.listMessages?.(folder, limit, page, mailboxUuid),
+      mailboxUuid
     );
   }
 
@@ -112,7 +118,8 @@ export class HybridMailService implements MailToolService {
           total: messages.length,
           scannedCount: messages.length,
         };
-      }
+      },
+      params.mailboxUuid
     );
   }
 
@@ -120,7 +127,8 @@ export class HybridMailService implements MailToolService {
     return this.withApiFallback(
       "read message",
       () => this.api?.readMessage?.(folder, uid, mailboxUuid, options),
-      () => this.legacy?.readMessage?.(folder, coerceLegacyUid(uid), mailboxUuid, options)
+      () => this.legacy?.readMessage?.(folder, coerceLegacyUid(uid), mailboxUuid, options),
+      mailboxUuid
     );
   }
 
@@ -133,7 +141,8 @@ export class HybridMailService implements MailToolService {
     return this.withApiFallback(
       "download attachments",
       () => this.api?.downloadAttachment?.(folder, uid, attachmentIndex, mailboxUuid),
-      () => this.legacy?.downloadAttachment?.(folder, coerceLegacyUid(uid), attachmentIndex, mailboxUuid)
+      () => this.legacy?.downloadAttachment?.(folder, coerceLegacyUid(uid), attachmentIndex, mailboxUuid),
+      mailboxUuid
     );
   }
 
@@ -167,7 +176,8 @@ export class HybridMailService implements MailToolService {
     return this.withApiFallback(
       "save draft",
       () => this.api?.saveDraft?.(params),
-      () => this.legacy?.saveDraft?.(params)
+      () => this.legacy?.saveDraft?.(params),
+      params.mailboxUuid
     );
   }
 
@@ -175,7 +185,8 @@ export class HybridMailService implements MailToolService {
     return this.withApiFallback(
       "create folders",
       () => this.api?.createFolder?.(params),
-      () => this.legacy?.createFolder?.(params)
+      () => this.legacy?.createFolder?.(params),
+      params.mailboxUuid
     );
   }
 
@@ -183,7 +194,8 @@ export class HybridMailService implements MailToolService {
     return this.withApiFallback(
       "rename folders",
       () => this.api?.renameFolder?.(params),
-      () => this.legacy?.renameFolder?.(params)
+      () => this.legacy?.renameFolder?.(params),
+      params.mailboxUuid
     );
   }
 
@@ -191,7 +203,8 @@ export class HybridMailService implements MailToolService {
     return this.withApiFallback(
       "delete folders",
       () => this.api?.deleteFolder?.(params),
-      () => this.legacy?.deleteFolder?.(params)
+      () => this.legacy?.deleteFolder?.(params),
+      params.mailboxUuid
     );
   }
 
@@ -200,10 +213,10 @@ export class HybridMailService implements MailToolService {
       "move messages",
       () => this.api?.moveMessage?.(folder, uid, destinationFolder, mailboxUuid),
       async () => {
-        rejectMailboxScopedLegacy("move messages", mailboxUuid);
         const legacy = this.requireLegacy("move messages");
         await legacy.moveMessage(folder, coerceLegacyUid(uid), destinationFolder);
-      }
+      },
+      mailboxUuid
     );
   }
 
@@ -212,10 +225,10 @@ export class HybridMailService implements MailToolService {
       "delete messages",
       () => this.api?.deleteMessage?.(folder, uid, mailboxUuid),
       async () => {
-        rejectMailboxScopedLegacy("delete messages", mailboxUuid);
         const legacy = this.requireLegacy("delete messages");
         await legacy.deleteMessage(folder, coerceLegacyUid(uid));
-      }
+      },
+      mailboxUuid
     );
   }
 
@@ -224,10 +237,10 @@ export class HybridMailService implements MailToolService {
       "flag messages",
       () => this.api?.flagMessage?.(folder, uid, flags, action, mailboxUuid),
       async () => {
-        rejectMailboxScopedLegacy("flag messages", mailboxUuid);
         const legacy = this.requireLegacy("flag messages");
         await legacy.flagMessage(folder, coerceLegacyUid(uid), flags, action);
-      }
+      },
+      mailboxUuid
     );
   }
 
@@ -279,21 +292,49 @@ export class HybridMailService implements MailToolService {
   private async withApiFallback<T>(
     operation: string,
     apiCall: () => Promise<T> | undefined,
-    legacyCall: () => Promise<T> | undefined
+    legacyCall: () => Promise<T> | undefined,
+    mailboxUuid?: string
   ): Promise<T> {
+    let apiError: unknown;
     if (this.api) {
       try {
         const result = apiCall();
         if (result) return await result;
       } catch (error) {
         if (!this.legacy) throw error;
+        if (!(await this.legacyServesMailbox(mailboxUuid))) {
+          throw new Error(
+            `Mail API failed to ${operation} for mailbox ${mailboxUuid}: ${formatError(error)} ` +
+            "(IMAP/SMTP fallback skipped: it only serves the MAIL_USER mailbox)."
+          );
+        }
+        apiError = error;
         console.error(`[infomaniak-mcp] Mail API failed to ${operation}; falling back to IMAP/SMTP: ${formatError(error)}`);
       }
     }
 
-    const fallback = legacyCall();
-    if (fallback) return fallback;
+    try {
+      const fallback = legacyCall();
+      if (fallback) return await fallback;
+    } catch (error) {
+      if (apiError === undefined) throw error;
+      throw new Error(`Mail API failed to ${operation}: ${formatError(apiError)}; IMAP/SMTP fallback also failed: ${formatError(error)}`);
+    }
+    if (apiError !== undefined) throw apiError;
     throw new Error(`No configured mail backend can ${operation}.`);
+  }
+
+  // The IMAP/SMTP fallback only knows the MAIL_USER account, so it may only stand in for
+  // the Mail API when the request is not scoped to a different mailbox.
+  private async legacyServesMailbox(mailboxUuid?: string): Promise<boolean> {
+    if (!mailboxUuid || mailboxUuid === "legacy") return true;
+    if (!this.legacyEmail || !this.api?.listMailboxes) return false;
+    try {
+      const mailbox = (await this.api.listMailboxes()).find((candidate) => candidate.uuid === mailboxUuid);
+      return mailbox?.email.toLowerCase() === this.legacyEmail.toLowerCase();
+    } catch {
+      return false;
+    }
   }
 
   private requireLegacy(operation: string): Required<Pick<
@@ -326,12 +367,4 @@ function coerceLegacyUid(uid: MailUid): number {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-// IMAP/SMTP fallback only knows the single MAIL_USER account, so it must never act
-// on a request that targeted a specific Mail API mailbox.
-function rejectMailboxScopedLegacy(operation: string, mailboxUuid?: string): void {
-  if (mailboxUuid) {
-    throw new Error(`Cannot ${operation} for mailbox ${mailboxUuid} via IMAP fallback; the Mail API call failed.`);
-  }
 }

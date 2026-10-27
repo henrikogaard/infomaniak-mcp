@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { MailReadOptions, MailSenderMessage, MailToolService } from "../services/mail.js";
+import { qualifyMailUid } from "../services/mail-uid.js";
 import { safeHandler, textResult, jsonResult, structuredResult, withUntrustedContent, type ToolResult } from "../tool-handler.js";
 import { defaultTempResourceRegistry, type TempResourceRegistry } from "../temp-resources.js";
 import { requireExternalConfirmation, type ToolRegistrationOptions } from "./register.js";
@@ -186,7 +187,7 @@ export function registerMailTools(server: McpServer, mail: MailToolService, opti
     "Read one email by UID. Defaults to metadata only; set include_body=true to fetch body text/HTML. With the Mail API backend, pass folder as folder_id:<id> to skip folder-name lookup.",
     {
       folder: z.string().describe("Folder path (e.g. INBOX), or folder_id:<id> for a Mail API folder ID"),
-      uid: uidSchema.describe("Message UID"),
+      uid: uidSchema.describe("Message UID as returned by mail listings. A uid@folderId value names its own folder and takes precedence over folder"),
       mailbox_uuid: z.string().optional().describe("Optional Infomaniak mailbox UUID when using the Mail API backend"),
       include_body: z.boolean().optional().describe("Fetch and return body content. Defaults to false to keep MCP context small."),
       body_format: z.enum(["text", "html", "both"]).optional().describe("Body format to return when include_body=true. Defaults to text."),
@@ -221,7 +222,7 @@ export function registerMailTools(server: McpServer, mail: MailToolService, opti
     "Download an email attachment by zero-based attachment index. By default saves to a temp file and returns a resource link; set include_base64=true only for small attachments.",
     {
       folder: z.string().describe("Folder path (e.g. INBOX)"),
-      uid: uidSchema.describe("Message UID"),
+      uid: uidSchema.describe("Message UID as returned by mail listings. A uid@folderId value names its own folder and takes precedence over folder"),
       mailbox_uuid: z.string().optional().describe("Optional Infomaniak mailbox UUID when using the Mail API backend"),
       attachment_index: z.number().int().min(0).describe("Zero-based attachment index from mail_read_message"),
       include_base64: z.boolean().optional().describe("Return base64 inline instead of saving to a temp file. Defaults to false."),
@@ -570,7 +571,7 @@ export function registerMailTools(server: McpServer, mail: MailToolService, opti
     "Move a message to a different folder.",
     {
       folder: z.string().describe("Current folder"),
-      uid: uidSchema.describe("Message UID"),
+      uid: uidSchema.describe("Message UID as returned by mail listings. A uid@folderId value names its own folder and takes precedence over folder"),
       destination: z.string().describe("Destination folder path"),
       mailbox_uuid: z.string().optional().describe("Optional Infomaniak mailbox UUID when using the Mail API backend"),
     },
@@ -587,7 +588,7 @@ export function registerMailTools(server: McpServer, mail: MailToolService, opti
     "Move a message to Trash. The Mail API backend moves to Trash rather than permanently purging.",
     {
       folder: z.string().describe("Folder containing the message"),
-      uid: uidSchema.describe("Message UID"),
+      uid: uidSchema.describe("Message UID as returned by mail listings. A uid@folderId value names its own folder and takes precedence over folder"),
       mailbox_uuid: z.string().optional().describe("Optional Infomaniak mailbox UUID when using the Mail API backend"),
     },
     destructive,
@@ -603,7 +604,7 @@ export function registerMailTools(server: McpServer, mail: MailToolService, opti
     "Add or remove flags on a message. Common flags: \\Seen (read), \\Flagged (starred), \\Answered (replied), \\Draft",
     {
       folder: z.string().describe("Folder containing the message"),
-      uid: uidSchema.describe("Message UID"),
+      uid: uidSchema.describe("Message UID as returned by mail listings. A uid@folderId value names its own folder and takes precedence over folder"),
       flags: z.array(z.string()).describe("Flags to add/remove (e.g. [\"\\\\Seen\", \"\\\\Flagged\"])"),
       action: z.enum(["add", "remove"]).describe("Whether to add or remove the flags"),
       mailbox_uuid: z.string().optional().describe("Optional Infomaniak mailbox UUID when using the Mail API backend"),
@@ -703,7 +704,7 @@ async function confirmSpamCleanup(mail: MailToolService, args: SpamCleanupConfir
   }
 
   const uids = preview.markExisting
-    ? preview.messages.map((message) => String(message.uid).includes("@") ? message.uid : `${message.uid}@${message.folderId}`)
+    ? preview.messages.map((message) => qualifyMailUid(message.uid, message.folderId))
     : [];
   const spamResult = uids.length > 0
     ? await mail.markMessagesAsSpam({
