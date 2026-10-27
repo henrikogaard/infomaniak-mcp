@@ -34,6 +34,7 @@ import type {
   SendMessageParams,
 } from "./mail.js";
 import { ThrottledHttpClient, type HttpFetch } from "./http-client.js";
+import { qualifyMailUid, splitMailUid } from "./mail-uid.js";
 
 interface ApiResponse<T> {
   result?: string;
@@ -326,7 +327,7 @@ export class MailApiService implements Partial<MailToolService> {
     options: MailReadOptions = {}
   ): Promise<MailReadMessageResult> {
     const uuid = await this.resolveMailboxUuid(mailboxUuid);
-    const folderId = await this.resolveFolderId(uuid, folder);
+    const messagePath = await this.resolveMessagePath(uuid, folder, uid);
     const includeThreadContext = options.includeThreadContext ?? true;
     const includeHeaders = options.includeHeaders ?? true;
     const includeBody = options.includeBody ?? true;
@@ -334,7 +335,7 @@ export class MailApiService implements Partial<MailToolService> {
     const preferredFormat = bodyFormat === "text" ? "plain" : "html";
     const withValues = ["auto_uncrypt", ...(includeThreadContext ? ["thread_context"] : [])];
     const response = await this.apiRequest<RawMessage>(
-      `/mail/${encodeURIComponent(uuid)}/folder/${encodeURIComponent(folderId)}/message/${encodeURIComponent(toApiMessageId(uid))}?prefered_format=${preferredFormat}&with=${withValues.join(",")}`
+      `${messagePath}?prefered_format=${preferredFormat}&with=${withValues.join(",")}`
     );
     const message = response.data ?? {};
     return {
@@ -376,10 +377,8 @@ export class MailApiService implements Partial<MailToolService> {
     }
 
     const uuid = await this.resolveMailboxUuid(mailboxUuid);
-    const folderId = await this.resolveFolderId(uuid, folder);
-    const raw = await this.downloadRaw(
-      `/mail/${encodeURIComponent(uuid)}/folder/${encodeURIComponent(folderId)}/message/${encodeURIComponent(toApiMessageId(uid))}/attachment/${encodeURIComponent(attachment.id)}`
-    );
+    const messagePath = await this.resolveMessagePath(uuid, folder, uid);
+    const raw = await this.downloadRaw(`${messagePath}/attachment/${encodeURIComponent(attachment.id)}`);
     const filename = parseContentDispositionFilename(raw.headers.get("content-disposition")) ?? attachment.filename;
     const contentType = (raw.headers.get("content-type") ?? attachment.contentType).split(";", 1)[0].trim();
 
@@ -513,7 +512,7 @@ export class MailApiService implements Partial<MailToolService> {
       throw new Error(`Bulk delete confirmation must exactly equal: ${preview.confirmationPhrase}`);
     }
 
-    const uids = preview.messages.map((message) => String(message.uid));
+    const uids = uniqueValues(preview.messages.map((message) => qualifyMailUid(message.uid, message.folderId)));
     await this.postMessageAction(preview.mailboxUuid, "move", { uids, to: preview.targetFolderId });
     this.invalidateMailboxCaches(preview.mailboxUuid);
 
@@ -531,10 +530,16 @@ export class MailApiService implements Partial<MailToolService> {
 
   async markMessagesAsSpam(params: MailMarkSpamParams): Promise<MailMarkSpamResult> {
     const mailbox = await this.resolveMailbox(params.mailboxUuid);
-    const uids = uniqueValues(params.uids.map((uid) => toApiMessageId(uid)));
-    if (uids.length === 0) {
+    const requested = uniqueValues(params.uids.map(String));
+    if (requested.length === 0) {
       throw new Error("At least one message UID is required.");
     }
+    const needsFolder = requested.some((uid) => !splitMailUid(uid).folderId);
+    if (needsFolder && !params.folder) {
+      throw new Error("Mail API spam actions need the source folder. Pass folder (e.g. INBOX) or full UIDs in uid@folderId form.");
+    }
+    const folderId = needsFolder ? (await this.resolveFolderRef(mailbox.uuid, params.folder!)).id : undefined;
+    const uids = uniqueValues(requested.map((uid) => qualifyMailUid(uid, folderId)));
     const expected = `MARK ${uids.length} MESSAGES AS SPAM`;
     if (params.confirmation !== expected) {
       throw new Error(`Spam confirmation must exactly equal: ${expected}`);
@@ -711,33 +716,37 @@ export class MailApiService implements Partial<MailToolService> {
 
   async moveMessage(folder: string, uid: MailUid, destinationFolder: string, mailboxUuid?: string): Promise<void> {
     const mailbox = await this.resolveMailbox(mailboxUuid);
-    const destinationFolderId = await this.resolveFolderId(mailbox.uuid, destinationFolder);
+    const [actionUid, destination] = await Promise.all([
+      this.resolveActionUid(mailbox.uuid, folder, uid),
+      this.resolveFolderRef(mailbox.uuid, destinationFolder),
+    ]);
     await this.postMessageAction(mailbox.uuid, "move", {
-      uids: [toApiMessageId(uid)],
-      to: destinationFolderId,
+      uids: [actionUid],
+      to: destination.id,
     });
     this.invalidateMailboxCaches(mailbox.uuid);
   }
 
-  async deleteMessage(_folder: string, uid: MailUid, mailboxUuid?: string): Promise<void> {
+  async deleteMessage(folder: string, uid: MailUid, mailboxUuid?: string): Promise<void> {
     const mailbox = await this.resolveMailbox(mailboxUuid);
-    const trashFolder = await this.resolveTrashFolder(mailbox.uuid);
+    const [actionUid, trashFolder] = await Promise.all([
+      this.resolveActionUid(mailbox.uuid, folder, uid),
+      this.resolveTrashFolder(mailbox.uuid),
+    ]);
     await this.postMessageAction(mailbox.uuid, "move", {
-      uids: [toApiMessageId(uid)],
+      uids: [actionUid],
       to: trashFolder.id,
     });
     this.invalidateMailboxCaches(mailbox.uuid);
   }
 
   async flagMessage(
-    _folder: string,
+    folder: string,
     uid: MailUid,
     flags: string[],
     action: "add" | "remove",
     mailboxUuid?: string
   ): Promise<void> {
-    const mailbox = await this.resolveMailbox(mailboxUuid);
-    const uids = [toApiMessageId(uid)];
     const messageActions = flags.map((flag) => {
       const apiAction = apiFlagAction(flag, action);
       if (!apiAction) {
@@ -745,6 +754,8 @@ export class MailApiService implements Partial<MailToolService> {
       }
       return apiAction;
     });
+    const mailbox = await this.resolveMailbox(mailboxUuid);
+    const uids = [await this.resolveActionUid(mailbox.uuid, folder, uid)];
 
     for (const messageAction of messageActions) {
       await this.postMessageAction(mailbox.uuid, messageAction, { uids });
@@ -784,7 +795,7 @@ export class MailApiService implements Partial<MailToolService> {
       `/mail/${encodeURIComponent(mailboxUuid)}/folder/${encodeURIComponent(folderId)}/message?offset=${offset}&thread=on&severywhere=0&limit=${limit}`
     );
     const threads = response.data?.threads ?? [];
-    const messages = threads.map(mapThread);
+    const messages = threads.map((thread) => mapThread(thread, folderId));
     return {
       messages,
       total: response.data?.count ?? response.data?.total ?? messages.length,
@@ -845,6 +856,22 @@ export class MailApiService implements Partial<MailToolService> {
       throw new Error(`Mail API folder "${match.path}" does not expose an ID.`);
     }
     return { id: match.id, path: match.path };
+  }
+
+  // Message actions are posted without a folder in the path, so bare UIDs are qualified
+  // with the (strictly resolved) source folder.
+  private async resolveActionUid(mailboxUuid: string, folder: string, uid: MailUid): Promise<string> {
+    const parts = splitMailUid(uid);
+    if (parts.folderId) return qualifyMailUid(uid);
+    if (!parts.uid) throw new Error("Message UID must not be empty.");
+    return qualifyMailUid(uid, (await this.resolveFolderRef(mailboxUuid, folder)).id);
+  }
+
+  private async resolveMessagePath(mailboxUuid: string, folder: string, uid: MailUid): Promise<string> {
+    const parts = splitMailUid(uid);
+    if (!parts.uid) throw new Error("Message UID must not be empty.");
+    const folderId = parts.folderId ?? await this.resolveFolderId(mailboxUuid, folder);
+    return `/mail/${encodeURIComponent(mailboxUuid)}/folder/${encodeURIComponent(folderId)}/message/${encodeURIComponent(parts.uid)}`;
   }
 
   private async resolveSearchFolders(
@@ -1235,10 +1262,13 @@ function flattenFolders(folders: RawFolder[], prefix = ""): MailFolder[] {
   return flattened;
 }
 
-function mapThread(thread: RawThread): MailMessageSummary {
-  const firstMessage = thread.messages?.[0];
+function mapThread(thread: RawThread, folderId: string): MailMessageSummary {
+  // Threads can include messages stored in other folders (e.g. the user's own copy in
+  // Sent); represent the thread by a message that lives in the listed folder.
+  const firstMessage = thread.messages?.find((candidate) => splitMailUid(candidate.uid ?? "").folderId === folderId)
+    ?? thread.messages?.[0];
   const message: MailMessageSummary = {
-    uid: toApiMessageId(firstMessage?.uid ?? thread.uid ?? ""),
+    uid: listingUid(firstMessage?.uid ?? thread.uid ?? "", folderId),
     subject: thread.subject ?? "(no subject)",
     from: formatAddresses(thread.from),
     date: thread.date ?? "",
@@ -1407,8 +1437,11 @@ function toRecipient(email: string): { name: string; email: string } {
   return { name: "", email: email.trim() };
 }
 
-function toApiMessageId(uid: MailUid): string {
-  return String(uid).split("@", 1)[0];
+// Keep the folder suffix only for a message outside the listed folder, so reads and
+// actions target that message rather than the same UID in the listed folder.
+function listingUid(uid: MailUid, folderId: string): string {
+  const parts = splitMailUid(uid);
+  return parts.folderId && parts.folderId !== folderId ? String(uid).trim() : parts.uid;
 }
 
 function requireMailboxHosting(mailbox: MailboxSummary): MailboxSummary & { hostingId: number; mailbox: string } {

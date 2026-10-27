@@ -145,7 +145,7 @@ let hybridMailService: HybridMailService | undefined;
   const legacyMail = config.mailUser && config.mailPassword ? new MailService(config) : undefined;
 
   if (isServiceEnabled(toolFilter, "mail") && (mailApi || legacyMail)) {
-    hybridMailService = new HybridMailService({ api: mailApi, legacy: legacyMail });
+    hybridMailService = new HybridMailService({ api: mailApi, legacy: legacyMail, legacyEmail: legacyMail ? config.mailUser : undefined });
     registerMailTools(toolServer, hybridMailService, {
       strictExternalSend: config.strictExternalSend,
       tempResources: defaultTempResourceRegistry,
