@@ -225,6 +225,7 @@ export interface MailBulkDeleteResult {
 
 export interface MailMarkSpamParams {
   mailboxUuid?: string;
+  folder?: string;
   uids: MailUid[];
   confirmation: string;
 }

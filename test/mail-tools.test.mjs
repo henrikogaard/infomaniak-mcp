@@ -445,7 +445,7 @@ test("mail spam cleanup previews before blocking and marking messages", async ()
   assert.equal(confirmed.isError, undefined);
   assert.equal(confirmed.structuredContent.blocked, true);
   assert.equal(confirmed.structuredContent.markedCount, 2);
-  assert.deepEqual(confirmed.structuredContent.markedUids, ["1", "2"]);
+  assert.deepEqual(confirmed.structuredContent.markedUids, ["1@inbox", "2@inbox"]);
   assert.deepEqual(calls.filter((call) => call[0] === "blockSender")[0][1], {
     sender: "*@spam.example",
     confirmation: "BLOCK *@spam.example",
